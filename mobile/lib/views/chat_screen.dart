@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../providers/chat_provider.dart';
@@ -16,9 +17,15 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final stt.SpeechToText _speech = stt.SpeechToText();
-  bool _isListening = false;
   bool _speechAvailable = false;
   String _currentLocaleId = 'zh_CN';
+
+  // 豆包风格语音按住说话状态
+  bool _isVoiceMode = false; // 是否处于底部按住说话大按钮模式
+  bool _isHoldingRecord = false; // 是否当前正按住录音
+  bool _isCanceling = false; // 是否上滑进入取消模式
+  String _liveWords = ''; // 实时识别文字
+  DateTime? _voiceStartTime;
 
   @override
   void initState() {
@@ -30,11 +37,15 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       _speechAvailable = await _speech.initialize(
         onError: (val) {
-          if (mounted) setState(() => _isListening = false);
+          if (mounted && _isHoldingRecord) {
+            setState(() => _isHoldingRecord = false);
+          }
         },
         onStatus: (val) {
           if (val == 'done' || val == 'notListening') {
-            if (mounted) setState(() => _isListening = false);
+            if (mounted && _isHoldingRecord) {
+              // 保持 holding 状态由松手控制
+            }
           }
         },
       );
@@ -74,7 +85,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _toggleListening() async {
+  /// 按下开始录音（豆包模式）
+  void _onVoiceStart() async {
     if (!_speechAvailable) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -86,33 +98,106 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    if (_isListening) {
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _isHoldingRecord = true;
+      _isCanceling = false;
+      _liveWords = '';
+      _voiceStartTime = DateTime.now();
+    });
+
+    try {
+      await _speech.listen(
+        onResult: (result) {
+          if (!mounted || !_isHoldingRecord) return;
+          setState(() {
+            _liveWords = result.recognizedWords;
+          });
+        },
+        listenOptions: stt.SpeechListenOptions(
+          listenMode: stt.ListenMode.dictation,
+          cancelOnError: false,
+          partialResults: true,
+          autoPunctuation: true,
+          localeId: _currentLocaleId,
+        ),
+      );
+    } catch (e) {
+      debugPrint('[STT] 启动录音异常: $e');
+      if (mounted) setState(() => _isHoldingRecord = false);
+    }
+  }
+
+  /// 手势滑动中：检测上滑取消
+  void _onVoiceMove(Offset localPosition) {
+    if (!_isHoldingRecord) return;
+    // 当手指向上滑动超过 50 像素时判定为上滑取消
+    final shouldCancel = localPosition.dy < -50;
+    if (shouldCancel != _isCanceling) {
+      HapticFeedback.selectionClick();
+      setState(() => _isCanceling = shouldCancel);
+    }
+  }
+
+  /// 松手结束录音并自动发送（豆包模式）
+  void _onVoiceEnd() async {
+    if (!_isHoldingRecord) return;
+
+    final wasCanceling = _isCanceling;
+    final duration = DateTime.now().difference(_voiceStartTime ?? DateTime.now());
+
+    HapticFeedback.lightImpact();
+    try {
       await _speech.stop();
-      if (mounted) setState(() => _isListening = false);
+    } catch (_) {}
+
+    setState(() {
+      _isHoldingRecord = false;
+      _isCanceling = false;
+    });
+
+    if (!mounted) return;
+
+    // 1. 用户主动上滑取消
+    if (wasCanceling) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('已取消发送'),
+          duration: Duration(milliseconds: 1000),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    // 2. 录音时间太短（小于 500ms）
+    if (duration.inMilliseconds < 500) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('说话时间太短'),
+          duration: Duration(milliseconds: 1000),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    // 稍等 150ms 确保语音引擎最后一段文本刷回
+    await Future.delayed(const Duration(milliseconds: 150));
+    if (!mounted) return;
+    final textToSend = _liveWords.trim();
+    if (textToSend.isNotEmpty) {
+      final provider = context.read<ChatProvider>();
+      provider.sendMessage(textToSend);
+      _scrollToBottom();
     } else {
-      if (mounted) setState(() => _isListening = true);
-      try {
-        await _speech.listen(
-          onResult: (result) {
-            if (!mounted) return;
-            setState(() {
-              _textController.text = result.recognizedWords;
-              _textController.selection = TextSelection.fromPosition(
-                TextPosition(offset: _textController.text.length),
-              );
-            });
-          },
-          listenOptions: stt.SpeechListenOptions(
-            listenMode: stt.ListenMode.dictation,
-            cancelOnError: false,
-            partialResults: true,
-            autoPunctuation: true,
-            localeId: _currentLocaleId,
-          ),
-        );
-      } catch (_) {
-        if (mounted) setState(() => _isListening = false);
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('未听清，请按住重说一次哦～'),
+          duration: Duration(milliseconds: 1500),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -137,10 +222,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _handleSend() {
-    if (_isListening) {
-      _speech.stop();
-      _isListening = false;
-    }
     final text = _textController.text.trim();
     if (text.isEmpty) return;
 
@@ -231,53 +312,138 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
       body: SafeArea(
-        child: Column(
+        child: Stack(
           children: [
-            if (!isOnline && provider.isInitialized)
-              GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
-                  );
-                },
-                child: Container(
-                  width: double.infinity,
-                  color: const Color(0xFFFEF2F2),
-                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.cloud_off, color: Color(0xFFDC2626), size: 18),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '未连接到小主机服务器，点击前往配置 IP 与 Token',
-                          style: TextStyle(color: Color(0xFF991B1B), fontSize: 13),
-                        ),
+            Column(
+              children: [
+                if (!isOnline && provider.isInitialized)
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                      );
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      color: const Color(0xFFFEF2F2),
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.cloud_off, color: Color(0xFFDC2626), size: 18),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '未连接到小主机服务器，点击前往配置 IP 与 Token',
+                              style: TextStyle(color: Color(0xFF991B1B), fontSize: 13),
+                            ),
+                          ),
+                          Icon(Icons.chevron_right, color: Color(0xFF991B1B), size: 18),
+                        ],
                       ),
-                      Icon(Icons.chevron_right, color: Color(0xFF991B1B), size: 18),
-                    ],
+                    ),
+                  ),
+                Expanded(
+                  child: provider.messages.isEmpty
+                      ? _buildEmptyState(characterName)
+                      : ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          itemCount: provider.messages.length,
+                          itemBuilder: (context, index) {
+                            final msg = provider.messages[index];
+                            return MessageBubble(
+                              message: msg,
+                              characterName: characterName,
+                            );
+                          },
+                        ),
+                ),
+                _buildInputArea(provider),
+              ],
+            ),
+
+            // 豆包风格屏幕中央按住说话悬浮弹窗
+            if (_isHoldingRecord) _buildVoiceHoldingModal(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 豆包风格高颜值录音悬浮窗
+  Widget _buildVoiceHoldingModal() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withValues(alpha: 0.35),
+        child: Center(
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            width: 220,
+            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+            decoration: BoxDecoration(
+              color: _isCanceling ? const Color(0xFFEF4444) : Colors.white.withValues(alpha: 0.96),
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.25),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _isCanceling
+                        ? Colors.white.withValues(alpha: 0.2)
+                        : const Color(0xFF8B5CF6).withValues(alpha: 0.12),
+                  ),
+                  child: Icon(
+                    _isCanceling ? Icons.delete_outline_rounded : Icons.mic_rounded,
+                    size: 38,
+                    color: _isCanceling ? Colors.white : const Color(0xFF8B5CF6),
                   ),
                 ),
-              ),
-            Expanded(
-              child: provider.messages.isEmpty
-                  ? _buildEmptyState(characterName)
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      itemCount: provider.messages.length,
-                      itemBuilder: (context, index) {
-                        final msg = provider.messages[index];
-                        return MessageBubble(
-                          message: msg,
-                          characterName: characterName,
-                        );
-                      },
+                const SizedBox(height: 14),
+                Text(
+                  _isCanceling
+                      ? '松开手指，取消发送'
+                      : (_liveWords.isEmpty ? '正在倾听中...' : _liveWords),
+                  textAlign: TextAlign.center,
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: _isCanceling ? Colors.white : const Color(0xFF1E293B),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _isCanceling
+                        ? Colors.white.withValues(alpha: 0.25)
+                        : Colors.grey.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _isCanceling ? '松开取消' : '松开发送，上滑取消',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: _isCanceling ? Colors.white : Colors.grey.shade600,
                     ),
+                  ),
+                ),
+              ],
             ),
-            _buildInputArea(provider),
-          ],
+          ),
         ),
       ),
     );
@@ -322,90 +488,126 @@ class _ChatScreenState extends State<ChatScreen> {
         color: Theme.of(context).cardColor,
         border: Border(top: BorderSide(color: Colors.grey.withValues(alpha: 0.15))),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: Row(
         children: [
-          if (_isListening)
-            Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEF2F2),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFFFECDD3)),
-              ),
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFE11D48)),
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      '🎙️ 正在倾听... 请说话，为您实时打字',
-                      style: TextStyle(fontSize: 13, color: Color(0xFFBE123C), fontWeight: FontWeight.w500),
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: _toggleListening,
-                    child: const Text('完成', style: TextStyle(fontSize: 13, color: Color(0xFFE11D48), fontWeight: FontWeight.bold)),
-                  ),
-                ],
-              ),
+          // 左侧：切换“按住说话”模式与“打字”模式
+          IconButton(
+            onPressed: () {
+              HapticFeedback.selectionClick();
+              setState(() {
+                _isVoiceMode = !_isVoiceMode;
+              });
+            },
+            icon: Icon(
+              _isVoiceMode ? Icons.keyboard_alt_outlined : Icons.mic_none_rounded,
+              color: const Color(0xFF8B5CF6),
+              size: 26,
             ),
-          Row(
-            children: [
-              IconButton(
-                onPressed: _toggleListening,
-                icon: Icon(
-                  _isListening ? Icons.mic : Icons.mic_none_rounded,
-                  color: _isListening ? const Color(0xFFE11D48) : const Color(0xFF2563EB),
-                ),
-                tooltip: _isListening ? '点击结束语音' : '语音输入（我说他写）',
-              ),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).scaffoldBackgroundColor,
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  child: TextField(
-                    controller: _textController,
-                    minLines: 1,
-                    maxLines: 4,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _handleSend(),
-                    decoration: InputDecoration(
-                      hintText: _isListening ? '正在倾听...' : '发消息或点麦克风说话...',
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+            tooltip: _isVoiceMode ? '切换打字' : '切换按住说话',
+          ),
+          const SizedBox(width: 4),
+
+          // 中间区域：按住说话大按钮 OR 文本输入框
+          Expanded(
+            child: _isVoiceMode
+                ? GestureDetector(
+                    onLongPressStart: (_) => _onVoiceStart(),
+                    onLongPressMoveUpdate: (d) => _onVoiceMove(d.localPosition),
+                    onLongPressEnd: (_) => _onVoiceEnd(),
+                    onVerticalDragStart: (_) => _onVoiceStart(),
+                    onVerticalDragUpdate: (d) => _onVoiceMove(d.localPosition),
+                    onVerticalDragEnd: (_) => _onVoiceEnd(),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      height: 44,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        gradient: _isHoldingRecord
+                            ? const LinearGradient(colors: [Color(0xFF8B5CF6), Color(0xFFA855F7)])
+                            : null,
+                        color: _isHoldingRecord ? null : Theme.of(context).scaffoldBackgroundColor,
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(
+                          color: _isHoldingRecord
+                              ? const Color(0xFF8B5CF6)
+                              : Colors.grey.withValues(alpha: 0.25),
+                          width: 1.2,
+                        ),
+                        boxShadow: _isHoldingRecord
+                            ? [
+                                BoxShadow(
+                                  color: const Color(0xFF8B5CF6).withValues(alpha: 0.35),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            _isHoldingRecord ? Icons.mic : Icons.mic_rounded,
+                            size: 20,
+                            color: _isHoldingRecord ? Colors.white : const Color(0xFF8B5CF6),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _isHoldingRecord ? '松开 发送' : '按住 说话',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: _isHoldingRecord ? Colors.white : Colors.grey.shade800,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).scaffoldBackgroundColor,
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: TextField(
+                      controller: _textController,
+                      minLines: 1,
+                      maxLines: 4,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _handleSend(),
+                      decoration: const InputDecoration(
+                        hintText: '发消息，或点左侧切换按住说话...',
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(vertical: 10),
+                      ),
                     ),
                   ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton.filled(
-                onPressed: provider.isSending ? null : _handleSend,
-                style: IconButton.styleFrom(
-                  backgroundColor: const Color(0xFF2563EB),
-                  shape: const CircleBorder(),
-                ),
-                icon: provider.isSending
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.white)),
-                      )
-                    : const Icon(Icons.arrow_upward_rounded, color: Colors.white),
-              ),
-            ],
+          ),
+          const SizedBox(width: 8),
+
+          // 右侧：打字发送按钮
+          IconButton.filled(
+            onPressed: provider.isSending ? null : _handleSend,
+            style: IconButton.styleFrom(
+              backgroundColor: const Color(0xFF8B5CF6),
+              shape: const CircleBorder(),
+            ),
+            icon: provider.isSending
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(Colors.white),
+                    ),
+                  )
+                : const Icon(Icons.arrow_upward_rounded, color: Colors.white),
           ),
         ],
       ),
     );
   }
 }
+
