@@ -82,6 +82,10 @@ class MessageBubble extends StatelessWidget {
                               EmojiSticker(emojiCode: message.detectedEmoji!),
                             if (message.detectedCompareKeyword != null)
                               CompareCard(keyword: message.detectedCompareKeyword!),
+                            if (message.detectedImageUrl != null)
+                              _buildImageCard(context, message.detectedImageUrl!),
+                            if (message.detectedMusicTitle != null)
+                              _buildMusicCard(context, message.detectedMusicTitle!, message.detectedMusicUrl),
                           ],
                         ),
                 ),
@@ -207,6 +211,184 @@ class MessageBubble extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImageCard(BuildContext context, String imageUrl) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8.0),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: GestureDetector(
+          onTap: () {
+            showDialog(
+              context: context,
+              builder: (ctx) => Dialog(
+                backgroundColor: Colors.transparent,
+                insetPadding: const EdgeInsets.all(12),
+                child: Stack(
+                  alignment: Alignment.topRight,
+                  children: [
+                    InteractiveViewer(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Image.network(imageUrl, fit: BoxFit.contain),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, color: Colors.white, size: 28),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 240, maxHeight: 320),
+            child: Image.network(
+              imageUrl,
+              fit: BoxFit.cover,
+              loadingBuilder: (ctx, child, progress) {
+                if (progress == null) return child;
+                return Container(
+                  height: 180,
+                  width: 220,
+                  color: Colors.grey.withValues(alpha: 0.1),
+                  child: const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF8B5CF6)),
+                        ),
+                        SizedBox(height: 8),
+                        Text('小娘子对镜理红妆画影中...', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                      ],
+                    ),
+                  ),
+                );
+              },
+              errorBuilder: (ctx, err, stack) => Container(
+                padding: const EdgeInsets.all(12),
+                color: Colors.grey.withValues(alpha: 0.1),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.broken_image_rounded, size: 20, color: Colors.grey),
+                    SizedBox(width: 6),
+                    Text('画像加载失败', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMusicCard(BuildContext context, String songTitle, String? musicUrl) {
+    final provider = Provider.of<ChatProvider>(context);
+    final isPlayingThis = musicUrl != null &&
+        provider.isPlayingAudio &&
+        provider.currentPlayingUrl == musicUrl;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8.0),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            if (musicUrl != null && musicUrl.isNotEmpty) {
+              provider.playAudio(musicUrl);
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('暂未解析到该曲目音频直链')),
+              );
+            }
+          },
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: isPlayingThis
+                  ? const Color(0xFF8B5CF6).withValues(alpha: 0.16)
+                  : const Color(0xFF8B5CF6).withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isPlayingThis ? const Color(0xFF8B5CF6) : const Color(0xFF8B5CF6).withValues(alpha: 0.3),
+                width: isPlayingThis ? 1.5 : 1.0,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: isPlayingThis
+                          ? [const Color(0xFFEC4899), const Color(0xFF8B5CF6)]
+                          : [const Color(0xFF8B5CF6), const Color(0xFFEC4899)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    boxShadow: isPlayingThis
+                        ? [
+                            BoxShadow(
+                              color: const Color(0xFF8B5CF6).withValues(alpha: 0.4),
+                              blurRadius: 8,
+                              spreadRadius: 1,
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: Icon(
+                    isPlayingThis ? Icons.graphic_eq_rounded : Icons.music_note_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      songTitle.startsWith('《') ? songTitle : '《$songTitle》',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF6D28D9),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      isPlayingThis ? '小娘子抚琴伴唱中 · 点击暂停' : '小娘子抚琴浅唱 · 点击即听',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: isPlayingThis ? const Color(0xFF8B5CF6) : Colors.grey.shade600,
+                        fontWeight: isPlayingThis ? FontWeight.w600 : FontWeight.normal,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 12),
+                Icon(
+                  isPlayingThis ? Icons.pause_circle_filled_rounded : Icons.play_circle_fill_rounded,
+                  color: const Color(0xFF8B5CF6),
+                  size: 26,
+                ),
+              ],
+            ),
           ),
         ),
       ),

@@ -78,6 +78,59 @@ export function clipForVoice(text, max = 120) {
   return `${head.slice(0, max - 1).trim()}…`;
 }
 
+/** 将 [image:xxx] 转换为基于 Pollinations FLUX 的零显卡超清古风自拍美图 */
+export function formatImageTags(text) {
+  return String(text ?? '').replace(/\[image:([^\]]+)\]/gi, (match, rawPrompt) => {
+    let p = String(rawPrompt || '').trim();
+    if (p.startsWith('http://') || p.startsWith('https://')) return `[image:${p}]`;
+    let prompt = 'masterpiece, best quality, breathtaking Chinese ancient noble beauty, delicate porcelain skin, elegant silk Hanfu, classical pavilion chamber, gentle loving gaze, hyperrealistic, 8k';
+    if (p && p !== 'selfie' && p !== '自拍') {
+      prompt = `${p}, Chinese ancient noble lady, highly detailed Hanfu, 8k, photorealistic`;
+    }
+    const seed = Math.floor(Math.random() * 1000000);
+    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=768&height=1024&model=flux&nologo=true&seed=${seed}`;
+    return `[image:${url}]`;
+  });
+}
+
+const CLASSICAL_MUSIC_REGISTRY = {
+  '相思引': 'https://music.163.com/song/media/outer/url?id=4873075.mp3',
+  '明月几时有': 'https://music.163.com/song/media/outer/url?id=186016.mp3',
+  '水调歌头': 'https://music.163.com/song/media/outer/url?id=186016.mp3',
+  '半壶纱': 'https://music.163.com/song/media/outer/url?id=28815250.mp3',
+  '青花瓷': 'https://music.163.com/song/media/outer/url?id=1883713919.mp3',
+  '琵琶语': 'https://music.163.com/song/media/outer/url?id=139774.mp3',
+  '高山流水': 'https://music.163.com/song/media/outer/url?id=140026.mp3',
+  '春江花月夜': 'https://music.163.com/song/media/outer/url?id=139773.mp3',
+  '清平调': 'https://music.163.com/song/media/outer/url?id=31877470.mp3',
+  '红颜旧': 'https://music.163.com/song/media/outer/url?id=34228965.mp3',
+  '锦鲤抄': 'https://music.163.com/song/media/outer/url?id=27588725.mp3',
+};
+
+/** 整理 [music:xxx] 音乐点歌标签，注入高清动听天籁直链 */
+export function formatMusicTags(text) {
+  return String(text ?? '').replace(/\[music:([^\]]+)\]/gi, (match, raw) => {
+    const rawVal = String(raw || '').trim();
+    if (rawVal.includes('|')) return `[music:${rawVal}]`;
+    const cleanTitle = rawVal.replace(/[《》]/g, '').trim();
+    let musicUrl = CLASSICAL_MUSIC_REGISTRY[cleanTitle];
+    if (!musicUrl) {
+      // 模糊匹配曲目库
+      for (const [k, u] of Object.entries(CLASSICAL_MUSIC_REGISTRY)) {
+        if (cleanTitle.includes(k) || k.includes(cleanTitle)) {
+          musicUrl = u;
+          break;
+        }
+      }
+    }
+    // 默认高雅古筝抚琴天籁（高山流水）
+    if (!musicUrl) {
+      musicUrl = 'https://music.163.com/song/media/outer/url?id=140026.mp3';
+    }
+    return `[music:${cleanTitle}|${musicUrl}]`;
+  });
+}
+
 /** 模型偶尔会回「小肥鱼：xxx」/ 引号 / markdown；气泡里不需要这些壳。 */
 export function cleanReply(text) {
   let out = String(text ?? '').trim();
@@ -85,15 +138,33 @@ export function cleanReply(text) {
   out = out.replace(/^\*\*([\s\S]+)\*\*$/, '$1').trim();
   out = out.replace(/^(小肥鱼|我|她)\s*[:：]\s*/, '').trim();
   out = out.replace(/^["“「『]([\s\S]*)["”」』]$/, '$1').trim();
-  return out.slice(0, 1000);
+  out = formatImageTags(out);
+  out = formatMusicTags(out);
+  return out.slice(0, 1500);
 }
 
-/** 语音文本里的动作/旁白（括号内容）会让 TTS 念出来，去掉。 */
+/** 语音文本清洗：去除动作旁白、表情包代号（如 [emoji:hug] / emoji_kiss）、比价标签等，防止 TTS 朗读出英文怪词。 */
 export function stripStageDirections(text) {
-  return String(text ?? '')
-    .replace(/[（(][^）)]{1,40}[）)]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  let s = String(text ?? '');
+  // 1. 过滤比价卡片与媒体代号：[compare:xxx], [image:xxx], [music:xxx], [sticker:xxx]
+  s = s.replace(/\[(compare|image|music|sticker|card):[^\]]*\]/gi, '');
+  // 2. 过滤表情包代号：[emoji:hug], [emoji_hug], {emoji:hug}, 以及单独出现的 emoji_xxx
+  s = s.replace(/\[\s*emoji[:_][^\]]+\]/gi, '');
+  s = s.replace(/\{\s*emoji[:_][^\}]+\}/gi, '');
+  s = s.replace(/\bemoji[:_][a-zA-Z0-9_-]+/gi, '');
+  // 3. 过滤常见方括号/六角括号动作与标签：[动作], 【动作】
+  s = s.replace(/\[[^\]]{1,50}\]/g, '');
+  s = s.replace(/【[^】]{1,50}】/g, '');
+  // 4. 过滤圆括号动作旁白：（脸红）、(轻笑)、（娇羞）
+  s = s.replace(/[（(][^）)]{1,50}[）)]/g, '');
+  // 5. 过滤星号动作动作旁白：*轻轻揉肩*、*依偎在你怀中*
+  s = s.replace(/\*[^*]{1,50}\*/g, '');
+  // 6. 过滤波浪号动作旁白：~轻抚~
+  s = s.replace(/~[^~]{1,30}~/g, '');
+  // 7. 过滤 HTML/XML 标签：<font>, <div> 等
+  s = s.replace(/<[^>]+>/g, '');
+  // 8. 规范化空格与连缀逗号
+  return s.replace(/\s+/g, ' ').replace(/，\s*，/g, '，').trim();
 }
 
 /**
@@ -276,6 +347,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
           personaFile: p.personaFile,
           hasPersona: Boolean(persona),
           profileKey: p.key,
+          voice: p.voice || 'zh-CN-XiaoxiaoNeural',
         };
       }
     }
@@ -289,7 +361,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
       const heading = persona.match(/^#\s*([^\n#]{1,40})/m);
       name = heading ? heading[1].trim() : '专属老婆';
     }
-    return { id: cur?.id || 'husband', name, persona, personaFile, hasPersona: Boolean(persona), profileKey: 'husband' };
+    return { id: cur?.id || 'husband', name, persona, personaFile, hasPersona: Boolean(persona), profileKey: 'husband', voice: 'zh-CN-XiaoxiaoNeural' };
   }
 
   function memoryBlock() {
@@ -561,9 +633,8 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
   }
 
   // ── 语音 ────────────────────────────────────────────────────────────────
-  async function synthesize(text) {
+  async function synthesize(text, voice = '') {
     const v = voiceSettings();
-    if (!v.enabled) return { ok: false, error: '语音合成未开启（设置 → 语音 → TTS）' };
     const spoken = clipForVoice(stripStageDirections(text), v.maxChars);
     if (!spoken) return { ok: false, error: '没有可念的内容' };
     ensureDirs();
@@ -571,12 +642,13 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
       const result = await synthesizeToFile({
         text: spoken,
         character: v.character,
+        voice: voice || v.voice || 'zh-CN-XiaoxiaoNeural',
         baseUrl: v.baseUrl,
         timeoutMs: v.timeoutMs,
         cacheVersion: v.cacheVersion,
         outDir: voiceDir,
       });
-      const key = path.basename(result.path, '.wav');
+      const key = path.basename(result.path, path.extname(result.path));
       audioFiles.set(key, result.path);
       return { ok: true, key, durationMs: result.durationMs, text: spoken };
     } catch (error) {
@@ -587,11 +659,21 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
     }
   }
 
-  /** 供 pet-api 读 wav：只认 voice 目录里的 hash 文件名，不接受任意路径。 */
+  /** 供 pet-api 读 wav/mp3：只认 voice 目录里的 hash 文件名，不接受任意路径。 */
   function readAudio(key) {
     const safe = String(key ?? '').replace(/[^a-f0-9]/gi, '');
     if (!safe || safe !== String(key ?? '')) return null;
-    const file = audioFiles.get(safe) || path.join(voiceDir, `${safe}.wav`);
+    let file = audioFiles.get(safe);
+    if (!file) {
+      const candidates = [
+        path.join(voiceDir, `${safe}.wav`),
+        path.join(voiceDir, `${safe}.mp3`),
+      ];
+      file = candidates.find(f => {
+        try { return fs.existsSync(f); } catch { return false; }
+      });
+    }
+    if (!file) return null;
     try {
       const stat = fs.statSync(file);
       if (!stat.isFile() || stat.size < 44) return null;
@@ -789,7 +871,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
       const userMessage = { id: `u-${now}-${tokenHash(say).slice(0, 6)}`, role: 'user', text: say, modality: mode, at: now };
       const aiMessage = { id: `a-${now}-${tokenHash(reply).slice(0, 6)}`, role: 'assistant', text: reply, modality: mode, at: now };
       if (mode === 'voice') {
-        const tts = await synthesize(reply);
+        const tts = await synthesize(reply, role.voice);
         if (tts.ok) {
           aiMessage.audioKey = tts.key;
           aiMessage.spokenText = tts.text;
@@ -837,7 +919,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
     const history = readHistory();
     const message = { id: `p-${now}-${tokenHash(body).slice(0, 6)}`, role: 'assistant', text: body, modality: mode, at: now, proactive: true };
     if (mode === 'voice') {
-      const tts = await synthesize(body);
+      const tts = await synthesize(body, roleInfo().voice);
       if (tts.ok) {
         message.audioKey = tts.key;
         message.spokenText = tts.text;

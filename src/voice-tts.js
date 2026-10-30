@@ -8,6 +8,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { synthesizeEdgeTts } from './voice-edge-tts.js';
 
 export const DEFAULT_BASE_URL = 'http://127.0.0.1:8765';
 
@@ -48,8 +49,11 @@ export async function synthesizeToFile({
   voice = '',
   style = null,
   baseUrl = DEFAULT_BASE_URL,
-  timeoutMs = 60000,
+  rate = '-12%',
+  pitch = '+2Hz',
   cacheVersion = null,
+  timeoutMs = 60000,
+  engine = 'auto',
   outDir,
   fetchImpl = fetch
 } = {}) {
@@ -66,6 +70,22 @@ export async function synthesizeToFile({
     if (st.size > 44) return { path: file, durationMs: wavDurationMs(fs.readFileSync(file)), cached: true };
   }
 
+  const isEdgeVoice = String(voice || '').includes('Neural') || engine === 'edge';
+  if (isEdgeVoice) {
+    const tmp = `${file}.${process.pid}.tmp`;
+    const edgeRes = await synthesizeEdgeTts({
+      text: say,
+      voice: voice || 'zh-CN-XiaoxiaoNeural',
+      rate,
+      pitch,
+      outFile: tmp,
+      timeoutMs,
+    });
+    fs.renameSync(tmp, file);
+    pruneCache(outDir);
+    return { path: file, durationMs: edgeRes.durationMs, cached: false };
+  }
+
   const body = { text: say, format: 'wav', sr: 24000, cache: true };
   if (character) body.character = String(character);
   if (voice) body.voice = String(voice);
@@ -80,11 +100,27 @@ export async function synthesizeToFile({
       signal: AbortSignal.timeout(timeoutMs)
     });
   } catch (error) {
-    const hint =
-      error?.name === 'TimeoutError'
-        ? `合成超时（>${Math.round(timeoutMs / 1000)}s）`
-        : 'TTS 服务没起来（voxd 是否在运行？）';
-    throw new Error(`${hint}：${error?.message ?? error}`);
+    // 若本地未启动 voxd（如无独显迷你主机），自动平滑回退至微软晓晓神经网络女声
+    try {
+      const tmp = `${file}.${process.pid}.tmp`;
+      const edgeRes = await synthesizeEdgeTts({
+        text: say,
+        voice: voice || 'zh-CN-XiaoxiaoNeural',
+        rate,
+        pitch,
+        outFile: tmp,
+        timeoutMs,
+      });
+      fs.renameSync(tmp, file);
+      pruneCache(outDir);
+      return { path: file, durationMs: edgeRes.durationMs, cached: false };
+    } catch (edgeErr) {
+      const hint =
+        error?.name === 'TimeoutError'
+          ? `合成超时（>${Math.round(timeoutMs / 1000)}s）`
+          : 'TTS 服务没起来（voxd 未运行且 Edge TTS 失败）';
+      throw new Error(`${hint}：${edgeErr?.message || error?.message || error}`);
+    }
   }
 
   if (!res.ok) {

@@ -21,11 +21,18 @@ class ChatMessage {
     this.isPending = false,
   });
 
-  /// 提取过滤掉 [emoji:xxx] 和 [compare:xxx] 后的干净文字
+  /// 提取过滤掉 [emoji:xxx]、[compare:xxx]、[image:xxx]、[music:xxx] 后的干净文字
   String get displayCleanText {
     var clean = text.replaceAll(RegExp(r'\[emoji:[a-zA-Z0-9_-]+\]'), '');
-    clean = clean.replaceAll(RegExp(r'\[compare:[^\]]+\]'), '').trim();
-    return clean.isEmpty && detectedEmoji != null ? '（发来了一个表情包）' : clean;
+    clean = clean.replaceAll(RegExp(r'\[compare:[^\]]+\]'), '');
+    clean = clean.replaceAll(RegExp(r'\[image:[^\]]+\]'), '');
+    clean = clean.replaceAll(RegExp(r'\[music:[^\]]+\]'), '').trim();
+    if (clean.isEmpty) {
+      if (detectedEmoji != null) return '（发来了一个表情包）';
+      if (detectedImageUrl != null) return '（奉上一张自拍画像）';
+      if (detectedMusicTitle != null) return '（为你抚琴浅唱）';
+    }
+    return clean;
   }
 
   /// 提取识别到的表情包代号
@@ -38,6 +45,24 @@ class ChatMessage {
   /// 提取比价关键词（格式形如 [compare:海信电视遥控器]）
   String? get detectedCompareKeyword {
     final match = RegExp(r'\[compare:([^\]]+)\]').firstMatch(text);
+    return match?.group(1)?.trim();
+  }
+
+  /// 提取图片直链（格式形如 [image:https://...]）
+  String? get detectedImageUrl {
+    final match = RegExp(r'\[image:(https?://[^\]]+)\]').firstMatch(text);
+    return match?.group(1)?.trim();
+  }
+
+  /// 提取音乐歌曲名（格式形如 [music:相思引] 或 [music:相思引|https://...]）
+  String? get detectedMusicTitle {
+    final match = RegExp(r'\[music:([^\|\]]+)(?:\|[^\]]+)?\]').firstMatch(text);
+    return match?.group(1)?.trim();
+  }
+
+  /// 提取音乐播放音频直链（格式形如 [music:歌名|https://...]）
+  String? get detectedMusicUrl {
+    final match = RegExp(r'\[music:[^\|\]]+\|([^\]]+)\]').firstMatch(text);
     return match?.group(1)?.trim();
   }
 
