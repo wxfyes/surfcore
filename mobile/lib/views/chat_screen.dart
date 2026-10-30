@@ -298,6 +298,30 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
+          // 豆包同款语音播报开关（开启才请求火山TTS，关闭省额度）
+          IconButton(
+            icon: Icon(
+              provider.isVoiceReplyEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+              color: provider.isVoiceReplyEnabled ? const Color(0xFF8B5CF6) : Colors.grey,
+            ),
+            tooltip: provider.isVoiceReplyEnabled ? '语音播报: 已开启 (调用火山TTS)' : '语音播报: 已关闭 (省额度)',
+            onPressed: () {
+              HapticFeedback.mediumImpact();
+              final willEnable = !provider.isVoiceReplyEnabled;
+              provider.toggleVoiceReply();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    willEnable
+                        ? '🎙️ 已开启小娘子语音播放（调用火山引擎合成）'
+                        : '🔇 已关闭语音播放（纯文本回复，不消耗火山额度）',
+                  ),
+                  duration: const Duration(milliseconds: 1500),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: '服务器配置',

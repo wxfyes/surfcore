@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/server_config.dart';
@@ -10,6 +11,7 @@ import '../services/api_client.dart';
 class ChatProvider extends ChangeNotifier {
   static const String _prefKeyConfig = 'surfcore_server_config';
   static const String _prefKeyMessages = 'surfcore_chat_history';
+  static const String _prefKeyVoiceReply = 'surfcore_voice_reply_enabled';
 
   late ServerConfig _config;
   late SurfCoreApiClient _apiClient;
@@ -21,6 +23,12 @@ class ChatProvider extends ChangeNotifier {
   bool _pollingActive = false;
   int? _lastEventSeq;
 
+  // 豆包风格语音播放开关与播放器
+  bool _isVoiceReplyEnabled = false; // 默认关闭，让用户右上角自由开启（省火山额度）
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  String? _currentPlayingUrl;
+  bool _isPlayingAudio = false;
+
   Timer? _statusTimer;
 
   ServerConfig get config => _config;
@@ -29,15 +37,29 @@ class ChatProvider extends ChangeNotifier {
   bool get isConnected => _isConnected;
   bool get isSending => _isSending;
   bool get isInitialized => _isInitialized;
+  bool get isVoiceReplyEnabled => _isVoiceReplyEnabled;
+  bool get isPlayingAudio => _isPlayingAudio;
+  String? get currentPlayingUrl => _currentPlayingUrl;
 
   ChatProvider() {
-    _config = const ServerConfig(host: '192.168.1.213', port: 3080, token: '');
+    _config = const ServerConfig(host: '192.168.1.213', port: 3088, token: '');
     _apiClient = SurfCoreApiClient(_config);
     _init();
   }
 
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
+    _isVoiceReplyEnabled = prefs.getBool(_prefKeyVoiceReply) ?? false;
+
+    _audioPlayer.onPlayerStateChanged.listen((state) {
+      final playing = state == PlayerState.playing;
+      if (_isPlayingAudio != playing) {
+        _isPlayingAudio = playing;
+        if (!playing) _currentPlayingUrl = null;
+        notifyListeners();
+      }
+    });
+
     final configStr = prefs.getString(_prefKeyConfig);
     if (configStr != null) {
       try {
@@ -154,6 +176,49 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  /// 切换语音回复开关（右上角豆包同款开关，开启才调用火山TTS，关闭省额度）
+  Future<void> toggleVoiceReply() async {
+    _isVoiceReplyEnabled = !_isVoiceReplyEnabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefKeyVoiceReply, _isVoiceReplyEnabled);
+    if (!_isVoiceReplyEnabled) {
+      await stopAudio();
+    }
+    notifyListeners();
+  }
+
+  /// 播放音频（支持气泡点击播放或自动播报）
+  Future<void> playAudio(String url) async {
+    try {
+      if (_currentPlayingUrl == url && _isPlayingAudio) {
+        await _audioPlayer.pause();
+        _isPlayingAudio = false;
+        notifyListeners();
+        return;
+      }
+      _currentPlayingUrl = url;
+      _isPlayingAudio = true;
+      notifyListeners();
+      await _audioPlayer.stop();
+      await _audioPlayer.play(UrlSource(url));
+    } catch (e) {
+      debugPrint('[Audio] 播放音频失败: $e');
+      _isPlayingAudio = false;
+      _currentPlayingUrl = null;
+      notifyListeners();
+    }
+  }
+
+  /// 停止音频播放
+  Future<void> stopAudio() async {
+    try {
+      await _audioPlayer.stop();
+    } catch (_) {}
+    _isPlayingAudio = false;
+    _currentPlayingUrl = null;
+    notifyListeners();
+  }
+
   /// 发送一条消息
   Future<void> sendMessage(String text) async {
     final clean = text.trim();
@@ -182,7 +247,9 @@ class ChatProvider extends ChangeNotifier {
     _persistMessages();
 
     try {
-      final reply = await _apiClient.sendMessage(clean);
+      // 核心控制：语音开关开启时才传 voice（触发火山TTS），关闭时传 text（完全不调用火山引擎，0耗额度）
+      final modality = _isVoiceReplyEnabled ? 'voice' : 'text';
+      final reply = await _apiClient.sendMessage(clean, modality: modality);
       final idx = _messages.indexWhere((m) => m.id == pendingId);
       if (idx != -1) {
         _messages[idx] = reply;
@@ -190,6 +257,11 @@ class ChatProvider extends ChangeNotifier {
         _messages.add(reply);
       }
       _isConnected = true;
+
+      // 如果开启了语音回复，且后端返回了音频，立即自动播报温柔语音！
+      if (_isVoiceReplyEnabled && reply.audioUrl != null && reply.audioUrl!.isNotEmpty) {
+        unawaited(playAudio(reply.audioUrl!));
+      }
     } catch (e) {
       final idx = _messages.indexWhere((m) => m.id == pendingId);
       if (idx != -1) {
@@ -211,6 +283,7 @@ class ChatProvider extends ChangeNotifier {
   /// 清空本地聊天历史记录
   Future<void> clearHistory() async {
     _messages.clear();
+    await stopAudio();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_prefKeyMessages);
     notifyListeners();
@@ -228,6 +301,7 @@ class ChatProvider extends ChangeNotifier {
   void dispose() {
     _pollingActive = false;
     _statusTimer?.cancel();
+    _audioPlayer.dispose();
     super.dispose();
   }
 }

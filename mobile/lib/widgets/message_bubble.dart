@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 import '../models/chat_message.dart';
+import '../providers/chat_provider.dart';
 import 'emoji_sticker.dart';
 import 'compare_card.dart';
 
@@ -74,6 +76,8 @@ class MessageBubble extends StatelessWidget {
                                           : Theme.of(context).textTheme.bodyLarge?.color),
                                 ),
                               ),
+                            if (message.audioUrl != null && message.audioUrl!.isNotEmpty)
+                              _buildVoiceBar(context, message.audioUrl!),
                             if (message.detectedEmoji != null)
                               EmojiSticker(emojiCode: message.detectedEmoji!),
                             if (message.detectedCompareKeyword != null)
@@ -153,6 +157,59 @@ class MessageBubble extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildVoiceBar(BuildContext context, String audioUrl) {
+    final provider = context.watch<ChatProvider>();
+    final isPlaying = provider.currentPlayingUrl == audioUrl && provider.isPlayingAudio;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8.0),
+      child: InkWell(
+        onTap: () {
+          provider.playAudio(audioUrl);
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: isPlaying
+                ? const Color(0xFF8B5CF6).withValues(alpha: 0.15)
+                : Colors.grey.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isPlaying ? const Color(0xFF8B5CF6) : Colors.transparent,
+              width: 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_fill_rounded,
+                size: 20,
+                color: const Color(0xFF8B5CF6),
+              ),
+              const SizedBox(width: 6),
+              Icon(
+                isPlaying ? Icons.graphic_eq_rounded : Icons.volume_up_rounded,
+                size: 16,
+                color: isPlaying ? const Color(0xFF8B5CF6) : Colors.grey.shade600,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                isPlaying ? '正在播放小娘子语音...' : '点击播放小娘子语音',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isPlaying ? FontWeight.bold : FontWeight.normal,
+                  color: isPlaying ? const Color(0xFF8B5CF6) : Colors.grey.shade700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
