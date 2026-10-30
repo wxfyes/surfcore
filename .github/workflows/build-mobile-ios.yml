@@ -10,7 +10,7 @@ on:
 jobs:
   build-ios:
     name: Build Unsigned IPA on macOS
-    runs-on: macos-14 # 使用 GitHub 官方提供的免费 Apple Silicon (M1/M2) 云主机
+    runs-on: macos-latest # 使用 GitHub 官方最新的 macOS (Apple Silicon) 云主机
 
     steps:
       - name: Checkout repository

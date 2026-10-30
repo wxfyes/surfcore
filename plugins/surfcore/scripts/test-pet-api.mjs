@@ -134,8 +134,8 @@ console.log('## 2. 令牌还没生成时：空令牌不得通过');
 
 console.log('## 3. 回环与同源');
 {
-  const remote = await call({ headers: { host: '192.168.1.5:57981', 'x-pet-token': TOKEN } });
-  ok(remote.res.statusCode === 403, '非回环 Host → 403');
+  const remote = await call({ headers: { host: 'evil-external-host.com:57981', 'x-pet-token': TOKEN } });
+  ok(remote.res.statusCode === 403, '非授权公网 Host → 403');
   const crossSite = await call({ method: 'POST', pathname: '/focus', headers: { ...jsonPost(), origin: 'http://evil.com' }, body: '{}' });
   ok(crossSite.res.statusCode === 403, '写操作跨站 Origin → 403');
   const noOrigin = await call({ method: 'POST', pathname: '/focus', headers: jsonPost(), body: '{"enabled":true}' });

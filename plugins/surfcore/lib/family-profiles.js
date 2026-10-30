@@ -33,6 +33,7 @@ export function createFamilyProfileManager({ rootDir, defaultTokenGetter = () =>
           name: '专属老婆',
           personaFile: path.join(QQ_PERSONA_DIR, '傲娇助手.md'),
           historyId: 'husband',
+          voice: 'zh-CN-XiaoxiaoNeural', // 晓晓：温柔娇妻小娘子
           description: '老公的专属小娇妻，千依百顺、温柔体贴、无话不谈',
         },
         wife: {
@@ -41,6 +42,7 @@ export function createFamilyProfileManager({ rootDir, defaultTokenGetter = () =>
           name: '贴心大管家',
           personaFile: path.join(QQ_PERSONA_DIR, '贴心管家.md'),
           historyId: 'wife',
+          voice: 'zh-CN-XiaoyiNeural', // 晓伊：亲切温婉女管家
           description: '女主人的专属管家，高情商倾听、生活百事通、情绪价值拉满',
         },
         son: {
@@ -49,6 +51,7 @@ export function createFamilyProfileManager({ rootDir, defaultTokenGetter = () =>
           name: '全能探索导师',
           personaFile: path.join(QQ_PERSONA_DIR, '全能导师.md'),
           historyId: 'son',
+          voice: 'zh-CN-YunxiNeural', // 云希：沉稳阳光学霸导师
           description: '孩子的学霸大哥哥与探索导师，幽默风趣、科学百科、启发式耐心辅导',
         },
       },

@@ -209,13 +209,18 @@ export function createPetApiService({ chat, purpose, petService, stateDir, curre
       return;
     }
     if (req.method === 'GET' && suffix.startsWith('/audio/')) {
-      const key = suffix.slice('/audio/'.length).replace(/\.wav$/i, '');
+      const key = suffix.slice('/audio/'.length).replace(/\.(wav|mp3)$/i, '');
       const audio = chat.readAudio(key);
       if (!audio) { json(res, 404, { ok: false, error: '音频不存在或已过期' }); return; }
       try {
+        const isMp3 = audio.bytes.length > 3 && (
+          (audio.bytes[0] === 0xff && (audio.bytes[1] & 0xe0) === 0xe0) ||
+          (audio.bytes[0] === 0x49 && audio.bytes[1] === 0x44 && audio.bytes[2] === 0x33)
+        );
         res.writeHead(200, {
-          'Content-Type': 'audio/wav',
+          'Content-Type': isMp3 ? 'audio/mpeg' : 'audio/wav',
           'Content-Length': String(audio.bytes.length),
+          'Accept-Ranges': 'bytes',
           'Cache-Control': 'private, max-age=86400',
         });
         res.end(audio.bytes);
