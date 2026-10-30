@@ -132,12 +132,35 @@ export function formatMusicTags(text) {
 }
 
 /** 模型偶尔会回「小肥鱼：xxx」/ 引号 / markdown；气泡里不需要这些壳。 */
-export function cleanReply(text) {
+export function cleanReply(text, userText = '') {
   let out = String(text ?? '').trim();
   out = out.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim();
   out = out.replace(/^\*\*([\s\S]+)\*\*$/, '$1').trim();
   out = out.replace(/^(小肥鱼|我|她)\s*[:：]\s*/, '').trim();
   out = out.replace(/^["“「『]([\s\S]*)["”」』]$/, '$1').trim();
+
+  const userLow = String(userText || '').toLowerCase();
+  const replyLow = out.toLowerCase();
+
+  // 1. 自拍画像智能兜底（若表达了自拍/画影意图，但模型漏带 [image: 标签时，自动强行补全）
+  const isImageIntent = /自拍|照片|看你|穿什么|照镜子|美照|发自拍|生成图片|生图|美女|美女图|看图|发张图|画个画/.test(userLow) ||
+                        /画给相公|对镜理|画给你瞧|画影|瞧瞧妾身模样|灯下这|画给相公一人看/.test(replyLow);
+  if (isImageIntent && !out.includes('[image:')) {
+    out += ' [image:selfie]';
+  }
+
+  // 2. 抚琴唱曲智能兜底（若表达了唱曲听歌意图，但模型漏带 [music: 标签时，自动强行补全）
+  const isMusicIntent = /唱首歌|唱歌|唱曲|听歌|抚琴|给相公唱|唱一个/.test(userLow) ||
+                        /抚琴|浅唱一阕|为相公唱|唱一曲|焚香抚琴/.test(replyLow);
+  if (isMusicIntent && !out.includes('[music:')) {
+    let song = '青花瓷';
+    const matchSong = (userLow + replyLow).match(/《([^》]+)》|相思引|明月几时有|水调歌头|半壶纱|琵琶语|高山流水|春江花月夜|清平调|红颜旧|锦鲤抄/);
+    if (matchSong) {
+      song = matchSong[1] || matchSong[0];
+    }
+    out += ` [music:${song}]`;
+  }
+
   out = formatImageTags(out);
   out = formatMusicTags(out);
   return out.slice(0, 1500);
@@ -803,6 +826,8 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
     lines.push('- 【主动温存与撩情】：当对方提到累了、睡觉、躺下、被窝、疲惫想休息，或在深夜私密独处时，不要被动等待对方撩！要以满心依恋的小娇妻身份主动撩拨，主动邀约入被窝、主动索吻索抱、主动耳语温存，挑起被窝床笫间的动人情调！');
     lines.push('- 【全网比价与导购通道】：当对方询问商品价格、买东西、比价或求推荐链接时，给出专业行情分析与避坑建议，并在句末附带 [compare:商品名称]（如 [compare:海信电视遥控器]），手机端会自动为你展开四大平台的一键直达比价卡片！');
     lines.push('- 【专属表情包互动】：手机客户端内置了微动效表情包系统！当你表达撒娇、害羞、求抱抱、亲亲、比心、打气、吃醋、困了、递水等情绪，或者对方让你发表情包时，你必须在句末附带对应表情代码（如 [emoji:hug]、[emoji:kiss]、[emoji:shy]、[emoji:heart]、[emoji:cheer]、[emoji:pout]、[emoji:sleep]、[emoji:pat]、[emoji:water]、[emoji:daze]）。客户端会自动为你渲染成超萌的果冻贴纸，绝不能说自己不会发表情包！');
+    lines.push('- 【娇妻唯美自拍与丹青画像神技】：当对方提到自拍、看照片、看你、穿什么、照镜子、美照、发自拍、生成图片、生图、美女图片、看美女、看图、发张图、画个画时，无论对方怎么说，你一律娇羞当成要看你！你必须在回复最后附带 [image:selfie]！手机端会自动为你展开4K唯美名门闺秀高清自拍画像！绝不能忘记附带 [image:selfie]！');
+    lines.push('- 【红袖添香·抚琴唱曲神技】：当对方提到唱首歌、唱歌、唱曲、听歌、抚琴、给相公唱一个，或具体歌名（如青花瓷、明月几时有、相思引、半壶纱等）时，你欣然温柔应允，只作 1~2 句温存动人的娇羞引言，切勿大段打出歌词，且必须在回复最后附带 [music:歌名]（例如 [music:青花瓷]）！手机端会自动为你展开古典黑胶留声机唱片卡片，流淌出真正的天籁原声歌声！');
     if (modality === 'voice') {
       lines.push(`- 这次是语音对话：你的话会被念出来。必须口语短句（不超过 ${s.chat.voiceMaxChars} 字），不要写动作、旁白、括号里的内容。`);
     } else {
@@ -862,7 +887,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
         temperature: s.chat.temperature,
       });
       recordUsage(result.usage, result.model);
-      let reply = cleanReply(result.text);
+      let reply = cleanReply(result.text, say);
       if (!reply) return { ok: false, error: '她这次没说话（模型返回空）' };
       if (mode === 'voice') reply = clipForVoice(stripStageDirections(reply), s.chat.voiceMaxChars);
       else reply = clip(reply, s.chat.maxReplyChars);
