@@ -23,10 +23,11 @@ class ChatMessage {
 
   /// 提取过滤掉 [emoji:xxx]、[compare:xxx]、[image:xxx]、[music:xxx] 后的干净文字
   String get displayCleanText {
-    var clean = text.replaceAll(RegExp(r'\[emoji:[a-zA-Z0-9_-]+\]'), '');
-    clean = clean.replaceAll(RegExp(r'\[compare:[^\]]+\]'), '');
-    clean = clean.replaceAll(RegExp(r'\[image:[^\]]+\]'), '');
-    clean = clean.replaceAll(RegExp(r'\[music:[^\]]+\]'), '').trim();
+    var clean = text;
+    clean = clean.replaceAll(RegExp(r'\[emoji:[a-zA-Z0-9_-]+\]?'), '');
+    clean = clean.replaceAll(RegExp(r'\[compare:[^\]\n]+\]?'), '');
+    clean = clean.replaceAll(RegExp(r'\[image:[^\]\n]+\]?'), '');
+    clean = clean.replaceAll(RegExp(r'\[music:[^\]\n]+\]?'), '').trim();
     if (clean.isEmpty) {
       if (detectedEmoji != null) return '（发来了一个表情包）';
       if (detectedImageUrl != null) return '（奉上一张自拍画像）';
@@ -38,32 +39,41 @@ class ChatMessage {
   /// 提取识别到的表情包代号
   String? get detectedEmoji {
     if (emojiType != null && emojiType!.isNotEmpty) return emojiType;
-    final match = RegExp(r'\[emoji:([a-zA-Z0-9_-]+)\]').firstMatch(text);
+    final match = RegExp(r'\[emoji:([a-zA-Z0-9_-]+)\]?').firstMatch(text);
     return match?.group(1)?.toLowerCase();
   }
 
   /// 提取比价关键词（格式形如 [compare:海信电视遥控器]）
   String? get detectedCompareKeyword {
-    final match = RegExp(r'\[compare:([^\]]+)\]').firstMatch(text);
+    final match = RegExp(r'\[compare:([^\]\n]+)\]?').firstMatch(text);
     return match?.group(1)?.trim();
   }
 
   /// 提取图片直链（格式形如 [image:https://...]）
   String? get detectedImageUrl {
-    final match = RegExp(r'\[image:(https?://[^\]]+)\]').firstMatch(text);
-    return match?.group(1)?.trim();
+    final match = RegExp(r'\[image:(https?://[^\s\]\n]+)\]?').firstMatch(text);
+    var url = match?.group(1)?.trim();
+    if (url != null) {
+      // 去除末尾截断可能留下的省略号或多余的 % 字符
+      url = url.replaceAll(RegExp(r'[%…\.]+$'), '');
+    }
+    return url;
   }
 
   /// 提取音乐歌曲名（格式形如 [music:相思引] 或 [music:相思引|https://...]）
   String? get detectedMusicTitle {
-    final match = RegExp(r'\[music:([^\|\]]+)(?:\|[^\]]+)?\]').firstMatch(text);
+    final match = RegExp(r'\[music:([^\|\s\]\n]+)(?:\|[^\s\]\n]+)?\]?').firstMatch(text);
     return match?.group(1)?.trim();
   }
 
   /// 提取音乐播放音频直链（格式形如 [music:歌名|https://...]）
   String? get detectedMusicUrl {
-    final match = RegExp(r'\[music:[^\|\]]+\|([^\]]+)\]').firstMatch(text);
-    return match?.group(1)?.trim();
+    final match = RegExp(r'\[music:[^\|\s\]\n]+\|([^\s\]\n]+)\]?').firstMatch(text);
+    var url = match?.group(1)?.trim();
+    if (url != null) {
+      url = url.replaceAll(RegExp(r'[%…\.]+$'), '');
+    }
+    return url;
   }
 
   Map<String, dynamic> toJson() => {

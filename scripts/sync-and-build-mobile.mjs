@@ -67,25 +67,29 @@ export async function runBuildAndFetch() {
 
   // 2. 发现或等待最新触发的 workflow run
   console.log('[Mobile-Build] 正在监控 GitHub Actions 构建状态...');
+  const currentCommit = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+  console.log(`[Mobile-Build] 本地当前 Commit: ${currentCommit.slice(0, 7)}`);
+
   let targetRun = null;
   const startTime = Date.now();
 
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 25; i++) {
     const res = await apiRequest(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/runs?per_page=5`, token);
     if (res.ok) {
       const data = await res.json();
       const runs = (data.workflow_runs || []).filter(r => r.name === WORKFLOW_NAME);
-      if (runs.length > 0) {
-        // 找到最新一条（处于 queued、in_progress，或者刚开始的 run）
-        const latest = runs[0];
-        const ageSec = Math.round((Date.now() - new Date(latest.created_at).getTime()) / 1000);
-        if (ageSec < 180 || latest.status === 'in_progress' || latest.status === 'queued') {
-          targetRun = latest;
-          break;
-        }
+      // 优先寻找匹配当前 commit 的最新 run
+      const matched = runs.find(r => r.head_commit?.id === currentCommit || r.head_sha === currentCommit);
+      if (matched) {
+        targetRun = matched;
+        break;
+      }
+      if (runs.length > 0 && (runs[0].status === 'in_progress' || runs[0].status === 'queued')) {
+        targetRun = runs[0];
+        break;
       }
     }
-    await sleep(3000);
+    await sleep(2500);
   }
 
   if (!targetRun) {

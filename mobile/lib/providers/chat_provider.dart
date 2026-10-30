@@ -27,6 +27,7 @@ class ChatProvider extends ChangeNotifier {
   bool _isVoiceReplyEnabled = false; // 默认关闭，让用户右上角自由开启（省火山额度）
   final AudioPlayer _audioPlayer = AudioPlayer();
   String? _currentPlayingUrl;
+  String? _nextQueuedMusicUrl;
   bool _isPlayingAudio = false;
 
   Timer? _statusTimer;
@@ -55,7 +56,21 @@ class ChatProvider extends ChangeNotifier {
       final playing = state == PlayerState.playing;
       if (_isPlayingAudio != playing) {
         _isPlayingAudio = playing;
-        if (!playing) _currentPlayingUrl = null;
+        if (!playing && state != PlayerState.paused && _nextQueuedMusicUrl == null) {
+          _currentPlayingUrl = null;
+        }
+        notifyListeners();
+      }
+    });
+
+    _audioPlayer.onPlayerComplete.listen((_) {
+      _isPlayingAudio = false;
+      if (_nextQueuedMusicUrl != null) {
+        final nextSong = _nextQueuedMusicUrl!;
+        _nextQueuedMusicUrl = null;
+        playAudio(nextSong);
+      } else {
+        _currentPlayingUrl = null;
         notifyListeners();
       }
     });
@@ -166,6 +181,18 @@ class ChatProvider extends ChangeNotifier {
                 _messages.add(proactiveMsg);
                 _persistMessages();
                 notifyListeners();
+
+                final musicUrl = proactiveMsg.detectedMusicUrl;
+                if (musicUrl != null && musicUrl.isNotEmpty) {
+                  if (_isVoiceReplyEnabled && proactiveMsg.audioUrl != null && proactiveMsg.audioUrl!.isNotEmpty) {
+                    _nextQueuedMusicUrl = musicUrl;
+                    unawaited(playAudio(proactiveMsg.audioUrl!));
+                  } else {
+                    unawaited(playAudio(musicUrl));
+                  }
+                } else if (_isVoiceReplyEnabled && proactiveMsg.audioUrl != null && proactiveMsg.audioUrl!.isNotEmpty) {
+                  unawaited(playAudio(proactiveMsg.audioUrl!));
+                }
               }
             }
           }
@@ -211,6 +238,7 @@ class ChatProvider extends ChangeNotifier {
 
   /// 停止音频播放
   Future<void> stopAudio() async {
+    _nextQueuedMusicUrl = null;
     try {
       await _audioPlayer.stop();
     } catch (_) {}
@@ -258,8 +286,19 @@ class ChatProvider extends ChangeNotifier {
       }
       _isConnected = true;
 
-      // 如果开启了语音回复，且后端返回了音频，立即自动播报温柔语音！
-      if (_isVoiceReplyEnabled && reply.audioUrl != null && reply.audioUrl!.isNotEmpty) {
+      // 自动播放联动：小娘子唱曲与语音
+      final musicUrl = reply.detectedMusicUrl;
+      if (musicUrl != null && musicUrl.isNotEmpty) {
+        if (_isVoiceReplyEnabled && reply.audioUrl != null && reply.audioUrl!.isNotEmpty) {
+          // 语音模式下：先播放小娘子引言，引言结束后自动无缝起唱歌曲
+          _nextQueuedMusicUrl = musicUrl;
+          unawaited(playAudio(reply.audioUrl!));
+        } else {
+          // 纯文字模式下：直接自动起唱歌曲
+          unawaited(playAudio(musicUrl));
+        }
+      } else if (_isVoiceReplyEnabled && reply.audioUrl != null && reply.audioUrl!.isNotEmpty) {
+        // 普通语音回复自动播报
         unawaited(playAudio(reply.audioUrl!));
       }
     } catch (e) {

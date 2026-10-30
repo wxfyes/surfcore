@@ -58,6 +58,20 @@ function clip(text, max) {
   return s.length > max ? `${s.slice(0, Math.max(1, max - 1))}…` : s;
 }
 
+/** 安全裁剪：保护 [image:...]、[music:...] 等媒体标签不被粗暴截断 */
+export function safeClip(text, max = 300) {
+  const s = String(text ?? '').trim();
+  const mediaTags = [];
+  const plainText = s.replace(/\[(image|music|compare|emoji):[^\]]+\]/gi, (match) => {
+    mediaTags.push(match);
+    return '';
+  }).trim();
+
+  const clipped = clip(plainText, max);
+  if (mediaTags.length === 0) return clipped;
+  return `${clipped}\n\n${mediaTags.join(' ')}`.trim();
+}
+
 /** 按句号/问号/感叹号截断到 max 字以内；没有标点就硬截。语音回复必须能一次念完。 */
 export function clipForVoice(text, max = 120) {
   const raw = String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -83,28 +97,30 @@ export function formatImageTags(text) {
   return String(text ?? '').replace(/\[image:([^\]]+)\]/gi, (match, rawPrompt) => {
     let p = String(rawPrompt || '').trim();
     if (p.startsWith('http://') || p.startsWith('https://')) return `[image:${p}]`;
-    let prompt = 'masterpiece, best quality, breathtaking Chinese ancient noble beauty, delicate porcelain skin, elegant silk Hanfu, classical pavilion chamber, gentle loving gaze, hyperrealistic, 8k';
+    let prompt = 'ancient Chinese noble lady, breathtaking beauty, delicate porcelain skin, elegant silk Hanfu, classical pavilion, photorealistic, 8k';
     if (p && p !== 'selfie' && p !== '自拍') {
-      prompt = `${p}, Chinese ancient noble lady, highly detailed Hanfu, 8k, photorealistic`;
+      prompt = `${p}, ancient Chinese beauty, Hanfu, 8k, photorealistic`;
     }
     const seed = Math.floor(Math.random() * 1000000);
-    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=768&height=1024&model=flux&nologo=true&seed=${seed}`;
+    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=768&height=1024&nologo=true&seed=${seed}`;
     return `[image:${url}]`;
   });
 }
 
+const JSD_MUSIC_BASE = 'https://cdn.jsdelivr.net/gh/2321881815/music3@main';
 const CLASSICAL_MUSIC_REGISTRY = {
-  '相思引': 'https://music.163.com/song/media/outer/url?id=4873075.mp3',
-  '明月几时有': 'https://music.163.com/song/media/outer/url?id=186016.mp3',
-  '水调歌头': 'https://music.163.com/song/media/outer/url?id=186016.mp3',
-  '半壶纱': 'https://music.163.com/song/media/outer/url?id=28815250.mp3',
-  '青花瓷': 'https://music.163.com/song/media/outer/url?id=1883713919.mp3',
-  '琵琶语': 'https://music.163.com/song/media/outer/url?id=139774.mp3',
-  '高山流水': 'https://music.163.com/song/media/outer/url?id=140026.mp3',
-  '春江花月夜': 'https://music.163.com/song/media/outer/url?id=139773.mp3',
-  '清平调': 'https://music.163.com/song/media/outer/url?id=31877470.mp3',
-  '红颜旧': 'https://music.163.com/song/media/outer/url?id=34228965.mp3',
-  '锦鲤抄': 'https://music.163.com/song/media/outer/url?id=27588725.mp3',
+  '青花瓷': `${JSD_MUSIC_BASE}/%E9%9D%92%E8%8A%B1%E7%93%B7-%E5%91%A8%E6%9D%B0%E4%BC%A6.mp3`,
+  '东风破': `${JSD_MUSIC_BASE}/%E4%B8%9C%E9%A3%8E%E7%A0%B4-%E5%91%A8%E6%9D%B0%E4%BC%A6.mp3`,
+  '七里香': `${JSD_MUSIC_BASE}/%E4%B8%83%E9%87%8C%E9%A6%99-%E5%91%A8%E6%9D%B0%E4%BC%A6.mp3`,
+  '稻香': `${JSD_MUSIC_BASE}/%E7%A8%BB%E9%A6%99-%E5%91%A8%E6%9D%B0%E4%BC%A6.mp3`,
+  '夜曲': `${JSD_MUSIC_BASE}/%E5%A4%9C%E6%9B%B2-%E5%91%A8%E6%9D%B0%E4%BC%A6.mp3`,
+  '江南': `${JSD_MUSIC_BASE}/%E6%B1%9F%E5%8D%97-%E6%9E%97%E4%BF%8A%E6%9D%B0.mp3`,
+  '人间惊鸿客': `${JSD_MUSIC_BASE}/%E4%BA%BA%E9%97%B4%E6%83%8A%E9%B8%BF%E5%AE%A2-%E5%8F%B6%E9%87%8C.mp3`,
+  '四季予你': `${JSD_MUSIC_BASE}/%E5%9B%9B%E5%AD%A3%E4%BA%88%E4%BD%A0-%E7%A8%8B%E5%93%8D.mp3`,
+  '惊鸿一面': `${JSD_MUSIC_BASE}/%E6%83%8A%E9%B8%BF%E4%B8%80%E9%9D%A2-%E8%AE%B8%E5%B5%A9-%E9%BB%84%E9%BE%84.mp3`,
+  '晚风作酒': `${JSD_MUSIC_BASE}/%E6%99%9A%E9%A3%8E%E4%BD%9C%E9%85%92-L%EF%BC%88%E6%A1%83%E7%B1%BD%EF%BC%89-%E5%91%A8%E6%9E%97%E6%9E%AB-%E4%B8%89%E6%A5%A0.mp3`,
+  '素颜': `${JSD_MUSIC_BASE}/%E7%B4%A0%E9%A2%9C-%E8%AE%B8%E5%B5%A9-%E4%BD%95%E6%9B%BC%E5%A9%B7.mp3`,
+  '一路生花': `${JSD_MUSIC_BASE}/%E4%B8%80%E8%B7%AF%E7%94%9F%E8%8A%B1-%E6%B8%A9%E5%A5%95%E5%BF%83.mp3`,
 };
 
 /** 整理 [music:xxx] 音乐点歌标签，注入高清动听天籁直链 */
@@ -123,9 +139,9 @@ export function formatMusicTags(text) {
         }
       }
     }
-    // 默认高雅古筝抚琴天籁（高山流水）
+    // 默认天籁原版高保真流式音频（青花瓷）
     if (!musicUrl) {
-      musicUrl = 'https://music.163.com/song/media/outer/url?id=140026.mp3';
+      musicUrl = `${JSD_MUSIC_BASE}/%E9%9D%92%E8%8A%B1%E7%93%B7-%E5%91%A8%E6%9D%B0%E4%BC%A6.mp3`;
     }
     return `[music:${cleanTitle}|${musicUrl}]`;
   });
@@ -890,7 +906,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
       let reply = cleanReply(result.text, say);
       if (!reply) return { ok: false, error: '她这次没说话（模型返回空）' };
       if (mode === 'voice') reply = clipForVoice(stripStageDirections(reply), s.chat.voiceMaxChars);
-      else reply = clip(reply, s.chat.maxReplyChars);
+      else reply = safeClip(reply, s.chat.maxReplyChars);
 
       const now = Date.now();
       const userMessage = { id: `u-${now}-${tokenHash(say).slice(0, 6)}`, role: 'user', text: say, modality: mode, at: now };
@@ -939,7 +955,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
     const mode = modality === 'voice' ? 'voice' : 'text';
     const body = mode === 'voice'
       ? clipForVoice(stripStageDirections(raw), s.chat.voiceMaxChars)
-      : clip(cleanReply(raw), s.chat.maxReplyChars);
+      : safeClip(cleanReply(raw), s.chat.maxReplyChars);
     const now = Date.now();
     const history = readHistory();
     const message = { id: `p-${now}-${tokenHash(body).slice(0, 6)}`, role: 'assistant', text: body, modality: mode, at: now, proactive: true };
