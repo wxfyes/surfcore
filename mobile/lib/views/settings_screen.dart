@@ -30,6 +30,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late bool _idleChatEnabled;
   late int _idleChatIntervalHours;
   late bool _voiceEnabled;
+  late bool _keepAliveEnabled;
+  bool _isTestingWakeup = false;
 
   @override
   void initState() {
@@ -58,6 +60,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _idleChatEnabled = routine.idleChatEnabled;
     _idleChatIntervalHours = routine.idleChatIntervalHours;
     _voiceEnabled = routine.voiceEnabled;
+    _keepAliveEnabled = routine.keepAliveEnabled;
   }
 
   @override
@@ -97,6 +100,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+  Future<void> _handleTestLockWakeup() async {
+    final provider = context.read<ChatProvider>();
+    setState(() => _isTestingWakeup = true);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('已进入3秒测试倒计时！请立刻按手机电源键锁屏，见证小娘子锁屏唤醒~'),
+        duration: Duration(seconds: 4),
+        backgroundColor: Color(0xFF6D28D9),
+      ),
+    );
+
+    await provider.testLockScreenWakeup(delaySeconds: 3);
+
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) {
+        setState(() => _isTestingWakeup = false);
+      }
+    });
+  }
+
   Future<void> _handleSave() async {
     if (!_formKey.currentState!.validate()) return;
     final tempConfig = ServerConfig(
@@ -118,6 +142,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       idleChatEnabled: _idleChatEnabled,
       idleChatIntervalHours: _idleChatIntervalHours,
       voiceEnabled: _voiceEnabled,
+      keepAliveEnabled: _keepAliveEnabled,
     );
     await provider.saveRoutineConfig(newRoutine);
 
@@ -234,6 +259,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         subtitle: const Text('触发早安/晚安时，手机自动念出小娘子原声语音'),
                         value: _voiceEnabled,
                         onChanged: (val) => setState(() => _voiceEnabled = val),
+                      ),
+                      // 5. 锁屏夜间守护与晨光保活
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('🛡️ 锁屏夜间守护与晨光保活', style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: const Text('微弱静音心跳维持系统 Audio 通道，iOS/Android 锁屏整夜不休眠、清晨准时叫醒'),
+                        value: _keepAliveEnabled,
+                        onChanged: (val) => setState(() => _keepAliveEnabled = val),
+                      ),
+                      const SizedBox(height: 12),
+                      // 6. 锁屏叫醒即时测试按钮
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF6D28D9),
+                            side: const BorderSide(color: Color(0xFF8B5CF6)),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          icon: Icon(_isTestingWakeup ? Icons.timer_outlined : Icons.alarm_on_rounded),
+                          label: Text(_isTestingWakeup ? '正在倒计时3秒，请立即锁屏...' : '⏰ 锁屏唤醒效果 3 秒实测（点击后请按电源键锁屏）'),
+                          onPressed: _isTestingWakeup ? null : _handleTestLockWakeup,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.6),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF8B5CF6).withValues(alpha: 0.2)),
+                        ),
+                        child: const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '💡 锁屏不哑火必看温馨贴士：',
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF4C1D95)),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              '• 🍎 iPhone: 切勿拨下机身左侧「物理静音开关」（红标会切断扬声器），保持外放音量适中。',
+                              style: TextStyle(fontSize: 11, color: Color(0xFF5B21B6), height: 1.3),
+                            ),
+                            Text(
+                              '• 🤖 Android: 建议长按桌面图标进入应用信息，将省电策略设为「无限制/允许后台高耗电」。',
+                              style: TextStyle(fontSize: 11, color: Color(0xFF5B21B6), height: 1.3),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),

@@ -6,6 +6,7 @@ class RoutineConfig {
   final bool idleChatEnabled;
   final int idleChatIntervalHours; // 3
   final bool voiceEnabled;
+  final bool keepAliveEnabled; // 锁屏夜间守护与晨光唤醒保活
 
   const RoutineConfig({
     this.morningCallEnabled = true,
@@ -15,6 +16,7 @@ class RoutineConfig {
     this.idleChatEnabled = true,
     this.idleChatIntervalHours = 3,
     this.voiceEnabled = true,
+    this.keepAliveEnabled = true,
   });
 
   RoutineConfig copyWith({
@@ -25,6 +27,7 @@ class RoutineConfig {
     bool? idleChatEnabled,
     int? idleChatIntervalHours,
     bool? voiceEnabled,
+    bool? keepAliveEnabled,
   }) {
     return RoutineConfig(
       morningCallEnabled: morningCallEnabled ?? this.morningCallEnabled,
@@ -34,6 +37,7 @@ class RoutineConfig {
       idleChatEnabled: idleChatEnabled ?? this.idleChatEnabled,
       idleChatIntervalHours: idleChatIntervalHours ?? this.idleChatIntervalHours,
       voiceEnabled: voiceEnabled ?? this.voiceEnabled,
+      keepAliveEnabled: keepAliveEnabled ?? this.keepAliveEnabled,
     );
   }
 
@@ -45,6 +49,7 @@ class RoutineConfig {
         'idleChatEnabled': idleChatEnabled,
         'idleChatIntervalHours': idleChatIntervalHours,
         'voiceEnabled': voiceEnabled,
+        'keepAliveEnabled': keepAliveEnabled,
       };
 
   factory RoutineConfig.fromJson(Map<String, dynamic> json) => RoutineConfig(
@@ -55,5 +60,6 @@ class RoutineConfig {
         idleChatEnabled: json['idleChatEnabled'] as bool? ?? true,
         idleChatIntervalHours: (json['idleChatIntervalHours'] as num?)?.toInt() ?? 3,
         voiceEnabled: json['voiceEnabled'] as bool? ?? true,
+        keepAliveEnabled: json['keepAliveEnabled'] as bool? ?? true,
       );
 }

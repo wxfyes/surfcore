@@ -291,6 +291,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
       idleChatEnabled: raw.idleChatEnabled !== false,
       idleChatIntervalHours: clampInt(raw.idleChatIntervalHours, 3, 1, 12),
       voiceEnabled: raw.voiceEnabled !== false,
+      keepAliveEnabled: raw.keepAliveEnabled !== false,
       lastMorningDate: String(raw.lastMorningDate || ''),
       lastNightDate: String(raw.lastNightDate || ''),
       lastIdleChatAt: Number(raw.lastIdleChatAt) || 0,
@@ -308,6 +309,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
       ...(patch.idleChatEnabled !== undefined ? { idleChatEnabled: patch.idleChatEnabled === true } : {}),
       ...(patch.idleChatIntervalHours ? { idleChatIntervalHours: clampInt(patch.idleChatIntervalHours, 3, 1, 12) } : {}),
       ...(patch.voiceEnabled !== undefined ? { voiceEnabled: patch.voiceEnabled === true } : {}),
+      ...(patch.keepAliveEnabled !== undefined ? { keepAliveEnabled: patch.keepAliveEnabled === true } : {}),
     };
     ensureDirs();
     writeJsonAtomic(routineFile, updated);
