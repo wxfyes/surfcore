@@ -18,6 +18,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _isListening = false;
   bool _speechAvailable = false;
+  String _currentLocaleId = 'zh_CN';
 
   @override
   void initState() {
@@ -37,6 +38,36 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         },
       );
+      if (_speechAvailable) {
+        try {
+          final systemLocale = await _speech.systemLocale();
+          final locales = await _speech.locales();
+          // 优先寻找包含 zh 的中文普通话语言模型（如 zh_CN, zh-CN, zh-Hans 等）
+          stt.LocaleName? targetLocale;
+          for (final loc in locales) {
+            final id = loc.localeId.toLowerCase().replaceAll('_', '-');
+            if (id.startsWith('zh-cn') || id == 'zh-hans' || id == 'zh') {
+              targetLocale = loc;
+              break;
+            }
+          }
+          targetLocale ??= locales.cast<stt.LocaleName?>().firstWhere(
+            (loc) => loc?.localeId.toLowerCase().startsWith('zh') ?? false,
+            orElse: () => null,
+          );
+          if (targetLocale != null) {
+            _currentLocaleId = targetLocale.localeId;
+          } else if (systemLocale != null && systemLocale.localeId.toLowerCase().startsWith('zh')) {
+            _currentLocaleId = systemLocale.localeId;
+          } else {
+            _currentLocaleId = 'zh_CN';
+          }
+          debugPrint('[STT] 语音识别就绪，选定中文模型: $_currentLocaleId');
+        } catch (e) {
+          debugPrint('[STT] 获取语言模型失败，保底 zh_CN: $e');
+          _currentLocaleId = 'zh_CN';
+        }
+      }
       if (mounted) setState(() {});
     } catch (_) {
       _speechAvailable = false;
@@ -76,6 +107,7 @@ class _ChatScreenState extends State<ChatScreen> {
             cancelOnError: false,
             partialResults: true,
             autoPunctuation: true,
+            localeId: _currentLocaleId,
           ),
         );
       } catch (_) {

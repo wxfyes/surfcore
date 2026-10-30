@@ -77,4 +77,6 @@ dist/*.zip
 .installed-manifest.json
 .installed-meta.json
 *.apk
+*.ipa
+Sideloadly*.exe
 
