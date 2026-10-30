@@ -51,7 +51,10 @@ export function isLoopbackReq(req) {
   const name = host.startsWith('[')
     ? (host.includes(']') ? host.slice(0, host.indexOf(']') + 1) : '')
     : host.split(':')[0];
-  return name === '127.0.0.1' || name === 'localhost' || name === '[::1]' || host === '::1';
+  if (name === '127.0.0.1' || name === 'localhost' || name === '[::1]' || host === '::1') return true;
+  // 允许私有局域网 IP (192.168.*, 10.*, 172.16-31.*) 与 Tailscale 虚拟网段 (100.*)
+  if (/^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.)/.test(name)) return true;
+  return false;
 }
 
 /**

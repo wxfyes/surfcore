@@ -71,19 +71,24 @@ export function createPetApiService({ chat, purpose, petService, stateDir, curre
     return `${API_PREFIX}/audio/${safe}.wav?token=${encodeURIComponent(token())}`;
   }
 
-  function authOk(req, url) {
-    const header = String(req.headers['x-pet-token'] ?? '');
-    const query = String(url?.searchParams?.get('token') ?? '');
+  function resolveAuth(req, url) {
+    const header = String(req.headers['x-pet-token'] ?? '').trim();
+    const query = String(url?.searchParams?.get('token') ?? '').trim();
+    const provided = header || query;
+    if (!provided) return null;
+    if (chat.resolveProfile) {
+      return chat.resolveProfile(provided);
+    }
     const expected = token();
-    if (!expected) return false;
-    if (header && safeEqual(header, expected)) return true;
-    if (query && safeEqual(query, expected)) return true;
-    return false;
+    if (expected && safeEqual(provided, expected)) {
+      return { key: 'husband', name: '专属老婆' };
+    }
+    return null;
   }
 
-  function statusForPet() {
+  function statusForPet(profileKey = '') {
     const base = petService?.status ? petService.status() : {};
-    const chatStatus = chat.status();
+    const chatStatus = chat.status(profileKey);
     return {
       ok: true,
       pet: { installed: Boolean(base.installed), running: Boolean(base.running), dir: base.dir || '', skins: base.skins || [] },
@@ -112,30 +117,32 @@ export function createPetApiService({ chat, purpose, petService, stateDir, curre
       json(res, 415, { ok: false, error: '写操作必须是 application/json' });
       return;
     }
-    if (!authOk(req, url)) {
+    const profile = resolveAuth(req, url);
+    if (!profile) {
       // 令牌不对时只给一个最小提示，别透露主机配置。
       json(res, 401, { ok: false, error: '桌宠令牌无效或还没生成（重启 DSH 后会自动重写 host.json）' });
       return;
     }
+    const profileKey = profile.key;
 
     const pathname = url.pathname;
     const suffix = pathname.slice(API_PREFIX.length) || '/';
 
     if (req.method === 'GET' && suffix === '/health') {
-      json(res, 200, { ok: true, name: 'surfcore-pet', version: String(version || ''), serverTime: Date.now() });
+      json(res, 200, { ok: true, name: 'surfcore-pet', version: String(version || ''), serverTime: Date.now(), user: profileKey });
       return;
     }
     if (req.method === 'GET' && suffix === '/status') {
-      json(res, 200, statusForPet());
+      json(res, 200, statusForPet(profileKey));
       return;
     }
     if (req.method === 'GET' && suffix === '/config') {
-      json(res, 200, { ok: true, ...chat.publicConfig(), serverTime: Date.now() });
+      json(res, 200, { ok: true, ...chat.publicConfig(profileKey), serverTime: Date.now() });
       return;
     }
     if (req.method === 'GET' && suffix === '/history') {
       const limit = Number(url.searchParams.get('limit')) || 60;
-      json(res, 200, chat.history(limit));
+      json(res, 200, chat.history(limit, profileKey));
       return;
     }
     // 目的机制（桌宠载体）的只读状态 / 预览 / 手动出发。
@@ -160,7 +167,7 @@ export function createPetApiService({ chat, purpose, petService, stateDir, curre
     if (req.method === 'POST' && suffix === '/chat') {
       let body = {};
       try { body = JSON.parse((await readBody(req, PET_BODY_LIMIT)) || '{}'); } catch { json(res, 400, { ok: false, error: '请求体不是合法 JSON' }); return; }
-      const result = await chat.chat({ text: body.text, modality: body.modality });
+      const result = await chat.chat({ text: body.text, modality: body.modality, profileKey });
       json(res, result.ok ? 200 : 400, result);
       return;
     }
