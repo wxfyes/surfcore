@@ -268,6 +268,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
   const voiceDir = path.join(root, 'voice');
   const tokenFile = path.join(root, 'host-token');
   const focusFile = path.join(root, 'focus.json');
+  const routineFile = path.join(root, 'routine-guard.json');
   const familyManager = createFamilyProfileManager({ rootDir: root, defaultTokenGetter: token });
 
   const events = [];
@@ -279,6 +280,99 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
   let lastChatAt = 0;
   let lastProactiveAt = 0;
   let lastError = '';
+
+  function readRoutineConfig() {
+    const raw = readJson(routineFile, null) || {};
+    return {
+      morningCallEnabled: raw.morningCallEnabled !== false,
+      morningCallTime: String(raw.morningCallTime || '08:00'),
+      nightSleepEnabled: raw.nightSleepEnabled !== false,
+      nightSleepTime: String(raw.nightSleepTime || '23:30'),
+      idleChatEnabled: raw.idleChatEnabled !== false,
+      idleChatIntervalHours: clampInt(raw.idleChatIntervalHours, 3, 1, 12),
+      voiceEnabled: raw.voiceEnabled !== false,
+      lastMorningDate: String(raw.lastMorningDate || ''),
+      lastNightDate: String(raw.lastNightDate || ''),
+      lastIdleChatAt: Number(raw.lastIdleChatAt) || 0,
+    };
+  }
+
+  function updateRoutineConfig(patch = {}) {
+    const current = readRoutineConfig();
+    const updated = {
+      ...current,
+      ...(patch.morningCallEnabled !== undefined ? { morningCallEnabled: patch.morningCallEnabled === true } : {}),
+      ...(patch.morningCallTime ? { morningCallTime: String(patch.morningCallTime).trim() } : {}),
+      ...(patch.nightSleepEnabled !== undefined ? { nightSleepEnabled: patch.nightSleepEnabled === true } : {}),
+      ...(patch.nightSleepTime ? { nightSleepTime: String(patch.nightSleepTime).trim() } : {}),
+      ...(patch.idleChatEnabled !== undefined ? { idleChatEnabled: patch.idleChatEnabled === true } : {}),
+      ...(patch.idleChatIntervalHours ? { idleChatIntervalHours: clampInt(patch.idleChatIntervalHours, 3, 1, 12) } : {}),
+      ...(patch.voiceEnabled !== undefined ? { voiceEnabled: patch.voiceEnabled === true } : {}),
+    };
+    ensureDirs();
+    writeJsonAtomic(routineFile, updated);
+    return updated;
+  }
+
+  let routineTimer = null;
+  function startRoutineGuard() {
+    if (routineTimer) return;
+    routineTimer = setInterval(async () => {
+      try {
+        const cfg = readRoutineConfig();
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+        const timeStr = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+        const hour = now.getHours();
+
+        // 1. 晨光早安唤醒检测
+        if (cfg.morningCallEnabled && timeStr === cfg.morningCallTime && cfg.lastMorningDate !== dateStr) {
+          cfg.lastMorningDate = dateStr;
+          writeJsonAtomic(routineFile, cfg);
+          pluginLog('[pet-routine] 触发晨光早安叫醒：', timeStr);
+          await proactive({
+            text: '夫君……天亮了，快些起身了……妾身把温水备好在榻前了，若是还赖床，妾身可要钻进被窝呵你痒痒啦~ [emoji:hug]',
+            modality: cfg.voiceEnabled ? 'voice' : 'text',
+          });
+          return;
+        }
+
+        // 2. 深夜安歇催眠检测
+        if (cfg.nightSleepEnabled && timeStr === cfg.nightSleepTime && cfg.lastNightDate !== dateStr) {
+          cfg.lastNightDate = dateStr;
+          writeJsonAtomic(routineFile, cfg);
+          pluginLog('[pet-routine] 触发深夜安歇催睡：', timeStr);
+          await proactive({
+            text: '夜深了，相公快放下手头物事上榻安歇吧……妾身早把被窝暖透了，正眼巴巴盼着相公来搂着妾身呢…… [emoji:sleep]',
+            modality: cfg.voiceEnabled ? 'voice' : 'text',
+          });
+          return;
+        }
+
+        // 3. 白天相思搭话（09:00 ~ 21:00）
+        if (cfg.idleChatEnabled && hour >= 9 && hour <= 21) {
+          const lastActive = Math.max(lastChatAt, lastProactiveAt, cfg.lastIdleChatAt || 0);
+          const gapMs = Date.now() - lastActive;
+          const thresholdMs = cfg.idleChatIntervalHours * 3600 * 1000;
+          if (lastActive > 0 && gapMs >= thresholdMs) {
+            cfg.lastIdleChatAt = Date.now();
+            writeJsonAtomic(routineFile, cfg);
+            pluginLog('[pet-routine] 触发白日相思搭话');
+            await proactive({
+              text: '相公在忙什么呢？妾身一个人坐着理丝线，心里全是你……抽空理理人家嘛 [emoji:shy]',
+              modality: cfg.voiceEnabled ? 'voice' : 'text',
+            });
+          }
+        }
+      } catch (err) {
+        pluginLog('[pet-routine] 守护定时器异常：', String(err?.message ?? err));
+      }
+    }, 25000);
+    routineTimer.unref?.();
+  }
+
+  startRoutineGuard();
 
   function ensureDirs() {
     fs.mkdirSync(chatDir, { recursive: true });
@@ -1075,5 +1169,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
     readFocus,
     focusEnabled,
     setFocus,
+    getRoutineConfig: readRoutineConfig,
+    updateRoutineConfig,
   };
 }

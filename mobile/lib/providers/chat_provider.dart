@@ -6,12 +6,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/server_config.dart';
 import '../models/chat_message.dart';
 import '../models/pet_status.dart';
+import '../models/routine_config.dart';
 import '../services/api_client.dart';
 
 class ChatProvider extends ChangeNotifier {
   static const String _prefKeyConfig = 'surfcore_server_config';
   static const String _prefKeyMessages = 'surfcore_chat_history';
   static const String _prefKeyVoiceReply = 'surfcore_voice_reply_enabled';
+  static const String _prefKeyRoutine = 'surfcore_routine_config';
 
   late ServerConfig _config;
   late SurfCoreApiClient _apiClient;
@@ -22,6 +24,13 @@ class ChatProvider extends ChangeNotifier {
   bool _isInitialized = false;
   bool _pollingActive = false;
   int? _lastEventSeq;
+
+  // 闺房作息守护与主动关怀配置
+  RoutineConfig _routineConfig = const RoutineConfig();
+  RoutineConfig get routineConfig => _routineConfig;
+  Timer? _localRoutineTimer;
+  String _lastLocalMorningDate = '';
+  String _lastLocalNightDate = '';
 
   // 豆包风格语音播放开关与播放器
   bool _isVoiceReplyEnabled = false; // 默认关闭，让用户右上角自由开启（省火山额度）
@@ -91,6 +100,13 @@ class ChatProvider extends ChangeNotifier {
       } catch (_) {}
     }
 
+    final routineStr = prefs.getString(_prefKeyRoutine);
+    if (routineStr != null) {
+      try {
+        _routineConfig = RoutineConfig.fromJson(jsonDecode(routineStr) as Map<String, dynamic>);
+      } catch (_) {}
+    }
+
     _isInitialized = true;
     notifyListeners();
 
@@ -98,6 +114,58 @@ class ChatProvider extends ChangeNotifier {
     await refreshStatus();
     _startPeriodicStatusCheck();
     _startEventPolling();
+    _syncRoutineWithServer();
+    _startLocalRoutineTimer();
+  }
+
+  Future<void> _syncRoutineWithServer() async {
+    try {
+      final remote = await _apiClient.fetchRoutineConfig();
+      if (remote != null) {
+        _routineConfig = RoutineConfig.fromJson(remote);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_prefKeyRoutine, jsonEncode(_routineConfig.toJson()));
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> saveRoutineConfig(RoutineConfig newConfig) async {
+    _routineConfig = newConfig;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefKeyRoutine, jsonEncode(newConfig.toJson()));
+    notifyListeners();
+    // 异步同步到小主机常驻守护
+    await _apiClient.updateRoutineConfig(newConfig.toJson());
+  }
+
+  void _startLocalRoutineTimer() {
+    _localRoutineTimer?.cancel();
+    _localRoutineTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
+      if (!_isConnected) return;
+      final now = DateTime.now();
+      String pad(int n) => n.toString().padLeft(2, '0');
+      final dateStr = '${now.year}-${pad(now.month)}-${pad(now.day)}';
+      final timeStr = '${pad(now.hour)}:${pad(now.minute)}';
+
+      // 本地早安双保险唤醒
+      if (_routineConfig.morningCallEnabled &&
+          timeStr == _routineConfig.morningCallTime &&
+          _lastLocalMorningDate != dateStr) {
+        _lastLocalMorningDate = dateStr;
+        debugPrint('[Routine] 触发手机端本地晨光早安双保险唤醒');
+        unawaited(sendMessage('相公醒来啦，快来给相公请早安'));
+      }
+
+      // 本地晚安双保险催歇
+      if (_routineConfig.nightSleepEnabled &&
+          timeStr == _routineConfig.nightSleepTime &&
+          _lastLocalNightDate != dateStr) {
+        _lastLocalNightDate = dateStr;
+        debugPrint('[Routine] 触发手机端本地深夜催歇双保险');
+        unawaited(sendMessage('夜深啦，相公准备歇息了'));
+      }
+    });
   }
 
   Future<bool> saveConfig(ServerConfig newConfig) async {

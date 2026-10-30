@@ -144,4 +144,28 @@ class SurfCoreApiClient {
     }
     return null;
   }
+
+  /// 获取小主机上的作息守护配置
+  Future<Map<String, dynamic>?> fetchRoutineConfig() async {
+    try {
+      final res = await _dio.get('/routine');
+      if (res.statusCode == 200 && res.data is Map<String, dynamic>) {
+        final data = res.data as Map<String, dynamic>;
+        if (data['ok'] == true && data['routine'] is Map<String, dynamic>) {
+          return data['routine'] as Map<String, dynamic>;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// 保存/同步作息守护配置至小主机
+  Future<bool> updateRoutineConfig(Map<String, dynamic> routineJson) async {
+    try {
+      final res = await _dio.post('/routine', data: routineJson);
+      return res.statusCode == 200 && res.data != null && res.data['ok'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
 }

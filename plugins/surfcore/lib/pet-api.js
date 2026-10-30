@@ -171,6 +171,17 @@ export function createPetApiService({ chat, purpose, petService, stateDir, curre
       json(res, result.ok ? 200 : 400, result);
       return;
     }
+    if (req.method === 'GET' && suffix === '/routine') {
+      json(res, 200, { ok: true, routine: chat.getRoutineConfig ? chat.getRoutineConfig() : {} });
+      return;
+    }
+    if (req.method === 'POST' && suffix === '/routine') {
+      let body = {};
+      try { body = JSON.parse((await readBody(req, PET_BODY_LIMIT)) || '{}'); } catch {}
+      const saved = chat.updateRoutineConfig ? chat.updateRoutineConfig(body) : body;
+      json(res, 200, { ok: true, routine: saved });
+      return;
+    }
     if (req.method === 'POST' && suffix === '/focus') {
       let body = {};
       try { body = JSON.parse((await readBody(req, PET_BODY_LIMIT)) || '{}'); } catch {}

@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import '../models/server_config.dart';
 import '../providers/chat_provider.dart';
 
+import '../models/routine_config.dart';
+
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -20,6 +22,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _testResult;
   bool? _testSuccess;
 
+  // 闺房作息守护状态
+  late bool _morningCallEnabled;
+  late TimeOfDay _morningCallTime;
+  late bool _nightSleepEnabled;
+  late TimeOfDay _nightSleepTime;
+  late bool _idleChatEnabled;
+  late int _idleChatIntervalHours;
+  late bool _voiceEnabled;
+
   @override
   void initState() {
     super.initState();
@@ -28,6 +39,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _portController = TextEditingController(text: provider.config.port.toString());
     _tokenController = TextEditingController(text: provider.config.token);
     _useHttps = provider.config.useHttps;
+
+    final routine = provider.routineConfig;
+    _morningCallEnabled = routine.morningCallEnabled;
+    final morningParts = routine.morningCallTime.split(':');
+    _morningCallTime = TimeOfDay(
+      hour: int.tryParse(morningParts.first) ?? 8,
+      minute: int.tryParse(morningParts.length > 1 ? morningParts[1] : '0') ?? 0,
+    );
+
+    _nightSleepEnabled = routine.nightSleepEnabled;
+    final nightParts = routine.nightSleepTime.split(':');
+    _nightSleepTime = TimeOfDay(
+      hour: int.tryParse(nightParts.first) ?? 23,
+      minute: int.tryParse(nightParts.length > 1 ? nightParts[1] : '30') ?? 30,
+    );
+
+    _idleChatEnabled = routine.idleChatEnabled;
+    _idleChatIntervalHours = routine.idleChatIntervalHours;
+    _voiceEnabled = routine.voiceEnabled;
   }
 
   @override
@@ -79,9 +109,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final provider = context.read<ChatProvider>();
     await provider.saveConfig(tempConfig);
 
+    String pad(int n) => n.toString().padLeft(2, '0');
+    final newRoutine = RoutineConfig(
+      morningCallEnabled: _morningCallEnabled,
+      morningCallTime: '${pad(_morningCallTime.hour)}:${pad(_morningCallTime.minute)}',
+      nightSleepEnabled: _nightSleepEnabled,
+      nightSleepTime: '${pad(_nightSleepTime.hour)}:${pad(_nightSleepTime.minute)}',
+      idleChatEnabled: _idleChatEnabled,
+      idleChatIntervalHours: _idleChatIntervalHours,
+      voiceEnabled: _voiceEnabled,
+    );
+    await provider.saveRoutineConfig(newRoutine);
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('配置已保存并同步')),
+        const SnackBar(content: Text('作息守护与服务器配置已保存并同步')),
       );
       Navigator.pop(context);
     }
@@ -93,7 +135,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('服务器连接设置'),
+        title: const Text('伴侣作息与连接设置'),
         centerTitle: true,
       ),
       body: SingleChildScrollView(
@@ -103,6 +145,101 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Card(
+                elevation: 0,
+                color: const Color(0xFF8B5CF6).withValues(alpha: 0.08),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(color: const Color(0xFF8B5CF6).withValues(alpha: 0.3)),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.bedtime_rounded, color: Color(0xFF8B5CF6)),
+                          SizedBox(width: 8),
+                          Text(
+                            '闺房作息守护与主动关怀',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF6D28D9)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '无需开启小主机桌面桌宠！小主机与手机双向心跳守护，锁屏到点准时唤醒。',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      ),
+                      const Divider(height: 24),
+                      // 1. 晨光早安叫醒
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('🌅 晨光早安唤醒', style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text('早晨 ${_morningCallTime.format(context)} 娇滴滴念语音叫醒夫君'),
+                        value: _morningCallEnabled,
+                        onChanged: (val) => setState(() => _morningCallEnabled = val),
+                        secondary: TextButton(
+                          onPressed: _morningCallEnabled
+                              ? () async {
+                                  final picked = await showTimePicker(
+                                    context: context,
+                                    initialTime: _morningCallTime,
+                                  );
+                                  if (picked != null) setState(() => _morningCallTime = picked);
+                                }
+                              : null,
+                          child: Text(_morningCallTime.format(context), style: const TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                      // 2. 深夜催歇就寝
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('🌙 深夜催歇就寝', style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text('夜晚 ${_nightSleepTime.format(context)} 催促相公放下手机温存安歇'),
+                        value: _nightSleepEnabled,
+                        onChanged: (val) => setState(() => _nightSleepEnabled = val),
+                        secondary: TextButton(
+                          onPressed: _nightSleepEnabled
+                              ? () async {
+                                  final picked = await showTimePicker(
+                                    context: context,
+                                    initialTime: _nightSleepTime,
+                                  );
+                                  if (picked != null) setState(() => _nightSleepTime = picked);
+                                }
+                              : null,
+                          child: Text(_nightSleepTime.format(context), style: const TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                      // 3. 白天相思搭话
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('💬 白日主动撒娇', style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text('白天超过 $_idleChatIntervalHours 小时没理她，主动发情话贴贴'),
+                        value: _idleChatEnabled,
+                        onChanged: (val) => setState(() => _idleChatEnabled = val),
+                        secondary: DropdownButton<int>(
+                          value: _idleChatIntervalHours,
+                          underline: const SizedBox(),
+                          items: [1, 2, 3, 4, 6].map((h) => DropdownMenuItem(value: h, child: Text('$h小时'))).toList(),
+                          onChanged: _idleChatEnabled ? (val) => setState(() => _idleChatIntervalHours = val ?? 3) : null,
+                        ),
+                      ),
+                      // 4. 自动语音播报
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('🔊 叫醒时自动朗读语音', style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: const Text('触发早安/晚安时，手机自动念出小娘子原声语音'),
+                        value: _voiceEnabled,
+                        onChanged: (val) => setState(() => _voiceEnabled = val),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
               Card(
                 elevation: 0,
                 color: theme.colorScheme.primaryContainer.withValues(alpha: 0.25),
