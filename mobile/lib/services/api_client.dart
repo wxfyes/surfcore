@@ -93,6 +93,39 @@ class SurfCoreApiClient {
     }
   }
 
+  /// 发送视频视讯消息（携带摄像头截帧画面与语音文本）
+  Future<Map<String, dynamic>> sendVideoChat({String? text, String? imageBase64, String modality = 'voice'}) async {
+    final response = await _dio.post(
+      '/video-chat',
+      data: {
+        if (text != null && text.isNotEmpty) 'text': text,
+        if (imageBase64 != null && imageBase64.isNotEmpty) 'imageBase64': imageBase64,
+        'modality': modality,
+      },
+    );
+
+    if (response.statusCode == 200 && response.data != null) {
+      final data = response.data as Map<String, dynamic>;
+      if (data['ok'] == true && data['reply'] != null) {
+        final reply = data['reply'] as Map<String, dynamic>;
+        final replyText = reply['text'] as String? ?? '';
+        final audioKey = reply['audio']?['key'] as String?;
+        String? audioUrl;
+        if (audioKey != null && audioKey.isNotEmpty) {
+          audioUrl = '${config.apiPrefix}/audio/$audioKey.wav?token=${Uri.encodeComponent(config.token.trim())}';
+        }
+        return {
+          'ok': true,
+          'text': replyText,
+          'audioUrl': audioUrl,
+          'visualFact': data['visualFact'] ?? '',
+        };
+      }
+      throw Exception(data['error'] ?? '视讯通话处理失败');
+    }
+    throw Exception('视讯服务响应异常: ${response.statusCode}');
+  }
+
   /// 拉取历史消息
   Future<List<ChatMessage>> fetchHistory({int limit = 50}) async {
     try {

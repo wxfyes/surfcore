@@ -5,6 +5,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../providers/chat_provider.dart';
 import '../widgets/message_bubble.dart';
 import 'settings_screen.dart';
+import 'video_call_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -319,6 +320,18 @@ class _ChatScreenState extends State<ChatScreen> {
                   duration: const Duration(milliseconds: 1500),
                   behavior: SnackBarBehavior.floating,
                 ),
+              );
+            },
+          ),
+          // 📹 闺房视讯·视频通话
+          IconButton(
+            icon: const Icon(Icons.videocam_rounded, color: Color(0xFF8B5CF6)),
+            tooltip: '发起闺房视频通话',
+            onPressed: () {
+              HapticFeedback.mediumImpact();
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const VideoCallScreen()),
               );
             },
           ),

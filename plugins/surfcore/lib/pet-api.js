@@ -171,6 +171,22 @@ export function createPetApiService({ chat, purpose, petService, stateDir, curre
       json(res, result.ok ? 200 : 400, result);
       return;
     }
+    if (req.method === 'POST' && suffix === '/video-chat') {
+      let body = {};
+      try { body = JSON.parse((await readBody(req, 2 * 1024 * 1024)) || '{}'); } catch { json(res, 400, { ok: false, error: '请求体不是合法 JSON' }); return; }
+      if (!chat.videoChat) {
+        json(res, 501, { ok: false, error: '当前小主机服务未加载视频视讯能力' });
+        return;
+      }
+      const result = await chat.videoChat({
+        text: body.text,
+        imageBase64: body.imageBase64,
+        modality: body.modality || 'voice',
+        profileKey,
+      });
+      json(res, result.ok ? 200 : 400, result);
+      return;
+    }
     if (req.method === 'GET' && suffix === '/routine') {
       json(res, 200, { ok: true, routine: chat.getRoutineConfig ? chat.getRoutineConfig() : {} });
       return;

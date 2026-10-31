@@ -463,6 +463,49 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
+  /// 闺房视讯通话：发送当前帧图像及相公语音
+  Future<Map<String, dynamic>> sendVideoCallFrame({String? text, String? imageBase64}) async {
+    try {
+      final res = await _apiClient.sendVideoChat(
+        text: text,
+        imageBase64: imageBase64,
+        modality: 'voice',
+      );
+
+      final replyText = res['text'] as String? ?? '';
+      final audioUrl = res['audioUrl'] as String?;
+      final visualFact = res['visualFact'] as String? ?? '';
+
+      if (replyText.isNotEmpty) {
+        final now = DateTime.now();
+        final aiMsg = ChatMessage(
+          id: 'v_${now.millisecondsSinceEpoch}',
+          text: replyText,
+          isUser: false,
+          timestamp: now,
+          modality: 'voice',
+          audioUrl: audioUrl,
+        );
+        _messages.add(aiMsg);
+        _persistMessages();
+        notifyListeners();
+      }
+
+      return {
+        'ok': true,
+        'text': replyText,
+        'audioUrl': audioUrl,
+        'visualFact': visualFact,
+      };
+    } catch (e) {
+      debugPrint('[VideoCall] 视讯传输异常: $e');
+      return {
+        'ok': false,
+        'error': e.toString(),
+      };
+    }
+  }
+
   /// 发送一条消息
   Future<void> sendMessage(String text) async {
     final clean = text.trim();

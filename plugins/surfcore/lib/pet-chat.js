@@ -27,6 +27,7 @@ import { adminFromSources } from '../../../src/admin-identity.js';
 import { appendMemoryInboxEvent } from '../../../src/memory-card.js?rev=20261025-pet-memory2';
 import { synthesizeToFile, wavDurationMs } from '../../../src/voice-tts.js';
 import { createFamilyProfileManager } from './family-profiles.js';
+import { analyzeVisualFrame } from './vision-gemini.js';
 
 const ONE_SECOND = 1000;
 const MAX_INPUT_CHARS = 1200;
@@ -1042,6 +1043,35 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
     }
   }
 
+  /** 视频视讯：多模态视觉感知（Google Gemini 3.5 Flash 专属代理）+ 核心灵魂（DeepSeek）+ 微软晓晓原声 */
+  async function videoChat({ text = '', imageBase64 = null, modality = 'voice', profileKey = '' } = {}) {
+    let visualFact = '';
+    if (imageBase64) {
+      try {
+        visualFact = await analyzeVisualFrame({ imageBase64 }) || '';
+      } catch (err) {
+        pluginLog('[pet-chat] 视频视觉感知异常：', String(err?.message ?? err));
+      }
+    }
+
+    const say = String(text ?? '').trim().slice(0, MAX_INPUT_CHARS);
+    let promptSay = say;
+    if (visualFact) {
+      promptSay = `【当前视讯实时画面：你透过手机视频正亲眼端详着相公，画面清晰显示：${visualFact}】\n` + (say ? `相公对你说：${say}` : '相公正在视频镜头前深情凝视着你，请你主动娇羞夸奖他的穿搭气色、神态举止，像真打视频电话一样温存问候。');
+    } else if (!say) {
+      promptSay = '（视频通话接通了，相公正在手机屏幕前看着你，请你用娇媚亲昵的口吻主动向相公视频问好，1~2句短促甜美）';
+    }
+
+    const result = await chat({ text: promptSay, modality, profileKey });
+    if (result.ok) {
+      return {
+        ...result,
+        visualFact,
+      };
+    }
+    return result;
+  }
+
   /** 主动搭话：文字/语音两条路都一样——先入历史，再发事件；语音合成失败只降级成文字。 */
   async function proactive({ text, modality = 'text', purpose = null } = {}) {
     const s = settings();
@@ -1151,6 +1181,7 @@ export function createPetChatService({ ctx, stateDir, pluginLog = () => {}, toke
     status,
     publicConfig,
     chat,
+    videoChat,
     proactive,
     history: historyPayload,
     poll,
