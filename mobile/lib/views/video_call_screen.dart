@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../providers/chat_provider.dart';
 
 class VideoCallScreen extends StatefulWidget {
@@ -18,7 +20,18 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
   int _selectedCameraIndex = 0;
   bool _isCameraReady = false;
   bool _isMuted = false;
-  bool _isInspecting = false; // 是否正在让娘子端详我
+  bool _isInspecting = false; // 是否正在主动点击“看相公”
+
+  // 语音识别 STT
+  final stt.SpeechToText _speech = stt.SpeechToText();
+  bool _speechAvailable = false;
+  String _currentLocaleId = 'zh_CN';
+  bool _isListening = false;
+  bool _isSending = false;
+  String _liveSpokenWords = '';
+  Timer? _silenceTimer;
+  bool _wasPlayingAudio = false;
+  bool _isHoldingToTalk = false; // 是否手动按住说话
 
   // 通话时长
   int _callDurationSeconds = 0;
@@ -37,6 +50,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
     _startDurationTimer();
     _initAnimation();
     _initCamera();
+    _initSpeech();
 
     // 视讯接通后 1.2 秒，小娘子主动向相公问安
     Future.delayed(const Duration(milliseconds: 1200), () {
@@ -105,6 +119,139 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
     }
   }
 
+  Future<void> _initSpeech() async {
+    try {
+      _speechAvailable = await _speech.initialize(
+        onError: (val) {
+          debugPrint('[VideoCall STT] 识别错误: $val');
+          if (mounted) {
+            setState(() => _isListening = false);
+          }
+        },
+        onStatus: (status) {
+          debugPrint('[VideoCall STT] 状态变更: $status');
+          if (status == 'notListening' || status == 'done') {
+            if (mounted && _isListening && !_isSending) {
+              _checkAndAutoSend();
+            }
+          }
+        },
+      );
+
+      if (_speechAvailable) {
+        try {
+          final systemLocale = await _speech.systemLocale();
+          final locales = await _speech.locales();
+          stt.LocaleName? targetLocale;
+          for (final loc in locales) {
+            final id = loc.localeId.toLowerCase().replaceAll('_', '-');
+            if (id.startsWith('zh-cn') || id == 'zh-hans' || id == 'zh') {
+              targetLocale = loc;
+              break;
+            }
+          }
+          targetLocale ??= locales.cast<stt.LocaleName?>().firstWhere(
+            (loc) => loc?.localeId.toLowerCase().startsWith('zh') ?? false,
+            orElse: () => null,
+          );
+          if (targetLocale != null) {
+            _currentLocaleId = targetLocale.localeId;
+          } else if (systemLocale != null && systemLocale.localeId.toLowerCase().startsWith('zh')) {
+            _currentLocaleId = systemLocale.localeId;
+          } else {
+            _currentLocaleId = 'zh_CN';
+          }
+          debugPrint('[VideoCall STT] 语音引擎就绪，选定模型: $_currentLocaleId');
+        } catch (e) {
+          _currentLocaleId = 'zh_CN';
+        }
+      }
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint('[VideoCall STT] 初始化失败: $e');
+      _speechAvailable = false;
+    }
+  }
+
+  /// 倾听相公说话
+  Future<void> _startListeningToHusband() async {
+    if (!_speechAvailable || _isMuted || _isSending) return;
+    if (!mounted) return;
+    final provider = context.read<ChatProvider>();
+    if (provider.isPlayingAudio) return;
+
+    if (_speech.isListening) {
+      return;
+    }
+
+    try {
+      setState(() {
+        _isListening = true;
+        _liveSpokenWords = '';
+      });
+
+      await _speech.listen(
+        onResult: (result) {
+          if (!mounted) return;
+          final words = result.recognizedWords.trim();
+          setState(() {
+            _liveSpokenWords = words;
+          });
+
+          // 相公停止说话后 1.5 秒无新字，自动抓拍画面与文字发送给娘子
+          _silenceTimer?.cancel();
+          if (words.isNotEmpty) {
+            if (result.finalResult) {
+              _sendSpokenMessage(words);
+            } else {
+              _silenceTimer = Timer(const Duration(milliseconds: 1500), () {
+                if (mounted && _liveSpokenWords.isNotEmpty && !_isSending) {
+                  _sendSpokenMessage(_liveSpokenWords);
+                }
+              });
+            }
+          }
+        },
+        listenOptions: stt.SpeechListenOptions(
+          listenMode: stt.ListenMode.dictation,
+          cancelOnError: false,
+          partialResults: true,
+          autoPunctuation: true,
+          localeId: _currentLocaleId,
+        ),
+      );
+    } catch (e) {
+      debugPrint('[VideoCall STT] 启动监听异常: $e');
+      if (mounted) setState(() => _isListening = false);
+    }
+  }
+
+  void _checkAndAutoSend() {
+    if (_liveSpokenWords.trim().isNotEmpty && !_isSending) {
+      _sendSpokenMessage(_liveSpokenWords.trim());
+    } else {
+      if (mounted) setState(() => _isListening = false);
+      // 若没有说话，稍作延迟后再次恢复待命监听
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted && !_isMuted && !_isSending) {
+          _startListeningToHusband();
+        }
+      });
+    }
+  }
+
+  Future<void> _stopListening() async {
+    _silenceTimer?.cancel();
+    if (_speech.isListening) {
+      try {
+        await _speech.stop();
+      } catch (_) {}
+    }
+    if (mounted) {
+      setState(() => _isListening = false);
+    }
+  }
+
   /// 翻转前后摄像头
   Future<void> _toggleCamera() async {
     if (_cameras.length < 2) return;
@@ -132,7 +279,11 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
       final audioUrl = res['audioUrl'] as String?;
       if (audioUrl != null && audioUrl.isNotEmpty) {
         unawaited(provider.playAudio(audioUrl));
+      } else {
+        _startListeningToHusband();
       }
+    } else if (mounted) {
+      _startListeningToHusband();
     }
   }
 
@@ -148,6 +299,54 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
     } catch (e) {
       debugPrint('[VideoCall] 抽帧异常: $e');
       return null;
+    }
+  }
+
+  /// 发送相公的话及最新视频截帧
+  Future<void> _sendSpokenMessage(String text) async {
+    final clean = text.trim();
+    if (clean.isEmpty || _isSending) return;
+
+    _silenceTimer?.cancel();
+    final provider = context.read<ChatProvider>();
+    await _stopListening();
+
+    setState(() {
+      _isSending = true;
+      _subtitleText = '相公：“$clean”\n（妾身正在看着相公思量……）';
+    });
+
+    String? imageBase64 = await _captureFrameBase64();
+
+    final res = await provider.sendVideoCallFrame(
+      text: clean,
+      imageBase64: imageBase64,
+    );
+
+    if (mounted) {
+      setState(() {
+        _isSending = false;
+        _liveSpokenWords = '';
+        if (res['ok'] == true) {
+          _subtitleText = res['text'] as String? ?? '';
+          if (res['visualFact'] != null && (res['visualFact'] as String).isNotEmpty) {
+            _visualFactNotice = res['visualFact'] as String;
+          }
+        } else {
+          _subtitleText = '相公，网络稍有些卡顿，不过妾身满心都是相公~';
+        }
+      });
+
+      final audioUrl = res['audioUrl'] as String?;
+      if (audioUrl != null && audioUrl.isNotEmpty) {
+        unawaited(provider.playAudio(audioUrl));
+      } else {
+        Future.delayed(const Duration(milliseconds: 1000), () {
+          if (mounted && !_isMuted) {
+            _startListeningToHusband();
+          }
+        });
+      }
     }
   }
 
@@ -183,6 +382,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
       final audioUrl = res['audioUrl'] as String?;
       if (audioUrl != null && audioUrl.isNotEmpty) {
         unawaited(provider.playAudio(audioUrl));
+      } else {
+        Future.delayed(const Duration(milliseconds: 1000), () {
+          if (mounted && !_isMuted) {
+            _startListeningToHusband();
+          }
+        });
       }
     }
   }
@@ -193,9 +398,29 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
     return '$m:$s';
   }
 
+  String _getStatusText(bool isSpeaking) {
+    if (isSpeaking) return '正在对相公呢喃软语……';
+    if (_isSending) return '娘子正在凝眸端详相公……';
+    if (_isHoldingToTalk) return '正在聆听相公圣谕，松手送达……';
+    if (_liveSpokenWords.isNotEmpty) return '正在聆听相公说话……';
+    if (_isListening) return '深情倾听相公中……';
+    if (_isMuted) return '麦克风已静音';
+    return '视讯连接已就绪';
+  }
+
+  Color _getStatusColor(bool isSpeaking) {
+    if (isSpeaking) return const Color(0xFFD946EF);
+    if (_isSending) return const Color(0xFFF59E0B);
+    if (_isHoldingToTalk || _liveSpokenWords.isNotEmpty) return const Color(0xFF38BDF8);
+    if (_isListening) return const Color(0xFF10B981);
+    return Colors.white54;
+  }
+
   @override
   void dispose() {
     _durationTimer?.cancel();
+    _silenceTimer?.cancel();
+    _speech.stop();
     _pulseController.dispose();
     _cameraController?.dispose();
     super.dispose();
@@ -205,6 +430,25 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
   Widget build(BuildContext context) {
     final provider = context.watch<ChatProvider>();
     final isSpeaking = provider.isPlayingAudio;
+
+    // 当小娘子说完话时，自动唤醒麦克风继续倾听相公
+    if (_wasPlayingAudio && !isSpeaking) {
+      _wasPlayingAudio = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_isMuted && !_isSending && !_isListening) {
+          Future.delayed(const Duration(milliseconds: 400), () {
+            if (mounted && !_isMuted && !_isSending) {
+              _startListeningToHusband();
+            }
+          });
+        }
+      });
+    } else if (isSpeaking) {
+      _wasPlayingAudio = true;
+      if (_isListening) {
+        _stopListening();
+      }
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFF13111C),
@@ -293,17 +537,18 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
                         Container(
                           width: 8,
                           height: 8,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF10B981),
+                          decoration: BoxDecoration(
+                            color: _getStatusColor(isSpeaking),
                             shape: BoxShape.circle,
                           ),
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          isSpeaking ? '正在对相公呢喃软语……' : '深情倾听相公中……',
+                          _getStatusText(isSpeaking),
                           style: TextStyle(
                             fontSize: 13,
-                            color: Colors.white.withValues(alpha: 0.7),
+                            color: Colors.white.withValues(alpha: 0.75),
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ],
@@ -394,7 +639,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
             ),
           ),
 
-          // 4. 下方字幕与视觉感知浮窗
+          // 4. 下方字幕与实时语音识别浮窗
           Positioned(
             bottom: 125,
             left: 20,
@@ -422,16 +667,33 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.45),
+                    color: Colors.black.withValues(alpha: 0.5),
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+                    border: Border.all(
+                      color: _liveSpokenWords.isNotEmpty
+                          ? const Color(0xFF38BDF8).withValues(alpha: 0.6)
+                          : Colors.white.withValues(alpha: 0.15),
+                      width: _liveSpokenWords.isNotEmpty ? 1.5 : 1,
+                    ),
+                    boxShadow: _liveSpokenWords.isNotEmpty
+                        ? [
+                            BoxShadow(
+                              color: const Color(0xFF38BDF8).withValues(alpha: 0.25),
+                              blurRadius: 12,
+                              spreadRadius: 2,
+                            ),
+                          ]
+                        : null,
                   ),
                   child: Text(
-                    _subtitleText,
-                    style: const TextStyle(
-                      color: Colors.white,
+                    _liveSpokenWords.isNotEmpty
+                        ? '🗣️ 相公：“$_liveSpokenWords”'
+                        : _subtitleText,
+                    style: TextStyle(
+                      color: _liveSpokenWords.isNotEmpty ? const Color(0xFFBAE6FD) : Colors.white,
                       fontSize: 14,
                       height: 1.4,
+                      fontWeight: _liveSpokenWords.isNotEmpty ? FontWeight.w600 : FontWeight.normal,
                       letterSpacing: 0.5,
                     ),
                     textAlign: TextAlign.center,
@@ -456,7 +718,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
                   onTap: _toggleCamera,
                 ),
 
-                // 让娘子端详我（拍照并由 Gemini 3.5 Flash 视觉识别）
+                // 让娘子端详我（拍照并由视觉识别）
                 _buildCircleButton(
                   icon: _isInspecting ? Icons.hourglass_top_rounded : Icons.remove_red_eye_rounded,
                   label: _isInspecting ? '端详中...' : '看相公',
@@ -464,19 +726,93 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
                   onTap: _isInspecting ? null : _inspectMe,
                 ),
 
-                // 麦克风开关
-                _buildCircleButton(
-                  icon: _isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
-                  label: _isMuted ? '已静音' : '麦克风',
+                // 麦克风（支持点击静音/开麦，也支持长按直接对讲）
+                GestureDetector(
                   onTap: () {
-                    setState(() => _isMuted = !_isMuted);
+                    HapticFeedback.selectionClick();
+                    setState(() {
+                      _isMuted = !_isMuted;
+                    });
+                    if (_isMuted) {
+                      _stopListening();
+                    } else {
+                      _startListeningToHusband();
+                    }
                   },
+                  onLongPressStart: (_) {
+                    if (_isSending) return;
+                    HapticFeedback.mediumImpact();
+                    setState(() {
+                      _isHoldingToTalk = true;
+                      _isMuted = false;
+                    });
+                    _startListeningToHusband();
+                  },
+                  onLongPressEnd: (_) {
+                    if (!_isHoldingToTalk) return;
+                    HapticFeedback.lightImpact();
+                    setState(() => _isHoldingToTalk = false);
+                    if (_liveSpokenWords.trim().isNotEmpty) {
+                      _sendSpokenMessage(_liveSpokenWords.trim());
+                    }
+                  },
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          color: _isMuted
+                              ? Colors.white.withValues(alpha: 0.1)
+                              : (_isHoldingToTalk || _liveSpokenWords.isNotEmpty
+                                  ? const Color(0xFF0284C7)
+                                  : const Color(0xFF10B981).withValues(alpha: 0.8)),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: _isMuted
+                                ? Colors.white24
+                                : (_isHoldingToTalk || _liveSpokenWords.isNotEmpty
+                                    ? const Color(0xFF38BDF8)
+                                    : const Color(0xFF34D399)),
+                            width: 1.5,
+                          ),
+                          boxShadow: [
+                            if (!_isMuted)
+                              BoxShadow(
+                                color: (_isHoldingToTalk
+                                        ? const Color(0xFF0284C7)
+                                        : const Color(0xFF10B981))
+                                    .withValues(alpha: 0.35),
+                                blurRadius: 10,
+                                spreadRadius: 2,
+                              ),
+                          ],
+                        ),
+                        child: Icon(
+                          _isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _isMuted ? '已静音' : (_isHoldingToTalk ? '松手发送' : '开麦中'),
+                        style: TextStyle(
+                          color: _isMuted ? Colors.white54 : const Color(0xFF6EE7B7),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
 
                 // 红色挂断大按钮
                 GestureDetector(
                   onTap: () {
                     provider.stopAudio();
+                    _speech.stop();
                     Navigator.pop(context);
                   },
                   child: Column(
