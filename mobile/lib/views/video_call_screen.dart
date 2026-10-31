@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -20,7 +21,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
   int _selectedCameraIndex = 0;
   bool _isCameraReady = false;
   bool _isMuted = false;
-  bool _isInspecting = false; // 是否正在主动点击“看相公”
+  bool _isInspecting = false;
 
   // 语音识别 STT
   final stt.SpeechToText _speech = stt.SpeechToText();
@@ -31,15 +32,22 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
   String _liveSpokenWords = '';
   Timer? _silenceTimer;
   bool _wasPlayingAudio = false;
-  bool _isHoldingToTalk = false; // 是否手动按住说话
+  bool _isHoldingToTalk = false;
+
+  // 防抖单次原子锁
+  DateTime _lastSendTimestamp = DateTime.fromMillisecondsSinceEpoch(0);
+  String _lastSentWords = '';
 
   // 通话时长
   int _callDurationSeconds = 0;
   Timer? _durationTimer;
 
-  // 动效控制器（小娘子说话声浪波纹与心跳）
-  late AnimationController _pulseController;
-  late Animation<double> _pulseAnimation;
+  // 动效控制器：3D豆包卡通形象呼吸、眨眼与声浪脉冲
+  late AnimationController _breatheController;
+  late Animation<double> _breatheAnimation;
+  late AnimationController _blinkController;
+  late Animation<double> _blinkAnimation;
+  Timer? _blinkRandomTimer;
 
   String _subtitleText = '相公，视频已接通啦……让妾身好好瞧瞧你~';
   String _visualFactNotice = '';
@@ -48,11 +56,11 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
   void initState() {
     super.initState();
     _startDurationTimer();
-    _initAnimation();
+    _initAnimations();
     _initCamera();
     _initSpeech();
 
-    // 视讯接通后 1.2 秒，小娘子主动向相公问安
+    // 接通 1.2 秒后小娘子主动问候
     Future.delayed(const Duration(milliseconds: 1200), () {
       if (mounted) {
         _triggerVideoGreeting();
@@ -60,14 +68,32 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
     });
   }
 
-  void _initAnimation() {
-    _pulseController = AnimationController(
+  void _initAnimations() {
+    // 1. 身体起伏呼吸律动
+    _breatheController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1800),
+      duration: const Duration(milliseconds: 2200),
     )..repeat(reverse: true);
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.12).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    _breatheAnimation = Tween<double>(begin: 0.98, end: 1.04).animate(
+      CurvedAnimation(parent: _breatheController, curve: Curves.easeInOut),
     );
+
+    // 2. 灵动眨眼动画
+    _blinkController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+    _blinkAnimation = Tween<double>(begin: 1.0, end: 0.05).animate(
+      CurvedAnimation(parent: _blinkController, curve: Curves.easeInOut),
+    );
+
+    _blinkRandomTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted && math.Random().nextBool()) {
+        _blinkController.forward().then((_) {
+          if (mounted) _blinkController.reverse();
+        });
+      }
+    });
   }
 
   void _startDurationTimer() {
@@ -84,14 +110,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
       _cameras = await availableCameras();
       if (_cameras.isEmpty) return;
 
-      // 默认优先选择前置摄像头看相公
       int frontIndex = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.front);
-      if (frontIndex != -1) {
-        _selectedCameraIndex = frontIndex;
-      } else {
-        _selectedCameraIndex = 0;
-      }
-
+      _selectedCameraIndex = frontIndex != -1 ? frontIndex : 0;
       await _setupCameraController(_cameras[_selectedCameraIndex]);
     } catch (e) {
       debugPrint('[VideoCall] 初始化摄像头异常: $e');
@@ -124,15 +144,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
       _speechAvailable = await _speech.initialize(
         onError: (val) {
           debugPrint('[VideoCall STT] 识别错误: $val');
-          if (mounted) {
-            setState(() => _isListening = false);
-          }
+          if (mounted) setState(() => _isListening = false);
         },
         onStatus: (status) {
           debugPrint('[VideoCall STT] 状态变更: $status');
           if (status == 'notListening' || status == 'done') {
-            if (mounted && _isListening && !_isSending) {
-              _checkAndAutoSend();
+            if (mounted && !_isSending && _liveSpokenWords.trim().isNotEmpty) {
+              _sendSpokenMessage(_liveSpokenWords.trim());
             }
           }
         },
@@ -161,14 +179,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
           } else {
             _currentLocaleId = 'zh_CN';
           }
-          debugPrint('[VideoCall STT] 语音引擎就绪，选定模型: $_currentLocaleId');
-        } catch (e) {
+        } catch (_) {
           _currentLocaleId = 'zh_CN';
         }
       }
       if (mounted) setState(() {});
     } catch (e) {
-      debugPrint('[VideoCall STT] 初始化失败: $e');
       _speechAvailable = false;
     }
   }
@@ -180,9 +196,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
     final provider = context.read<ChatProvider>();
     if (provider.isPlayingAudio) return;
 
-    if (_speech.isListening) {
-      return;
-    }
+    if (_speech.isListening) return;
 
     try {
       setState(() {
@@ -192,19 +206,18 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
 
       await _speech.listen(
         onResult: (result) {
-          if (!mounted) return;
+          if (!mounted || _isSending) return;
           final words = result.recognizedWords.trim();
           setState(() {
             _liveSpokenWords = words;
           });
 
-          // 相公停止说话后 1.5 秒无新字，自动抓拍画面与文字发送给娘子
           _silenceTimer?.cancel();
-          if (words.isNotEmpty) {
+          if (words.isNotEmpty && !_isSending) {
             if (result.finalResult) {
               _sendSpokenMessage(words);
             } else {
-              _silenceTimer = Timer(const Duration(milliseconds: 1500), () {
+              _silenceTimer = Timer(const Duration(milliseconds: 1600), () {
                 if (mounted && _liveSpokenWords.isNotEmpty && !_isSending) {
                   _sendSpokenMessage(_liveSpokenWords);
                 }
@@ -226,20 +239,6 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
     }
   }
 
-  void _checkAndAutoSend() {
-    if (_liveSpokenWords.trim().isNotEmpty && !_isSending) {
-      _sendSpokenMessage(_liveSpokenWords.trim());
-    } else {
-      if (mounted) setState(() => _isListening = false);
-      // 若没有说话，稍作延迟后再次恢复待命监听
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted && !_isMuted && !_isSending) {
-          _startListeningToHusband();
-        }
-      });
-    }
-  }
-
   Future<void> _stopListening() async {
     _silenceTimer?.cancel();
     if (_speech.isListening) {
@@ -252,71 +251,42 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
     }
   }
 
-  /// 翻转前后摄像头
-  Future<void> _toggleCamera() async {
-    if (_cameras.length < 2) return;
-    _selectedCameraIndex = (_selectedCameraIndex + 1) % _cameras.length;
-    await _setupCameraController(_cameras[_selectedCameraIndex]);
-  }
-
-  /// 通话刚接通时的主动问候
-  Future<void> _triggerVideoGreeting() async {
-    final provider = context.read<ChatProvider>();
-    String? imageBase64 = await _captureFrameBase64();
-
-    final res = await provider.sendVideoCallFrame(
-      text: '',
-      imageBase64: imageBase64,
-    );
-
-    if (mounted && res['ok'] == true) {
-      setState(() {
-        _subtitleText = res['text'] as String? ?? '';
-        if (res['visualFact'] != null && (res['visualFact'] as String).isNotEmpty) {
-          _visualFactNotice = res['visualFact'] as String;
-        }
-      });
-      final audioUrl = res['audioUrl'] as String?;
-      if (audioUrl != null && audioUrl.isNotEmpty) {
-        unawaited(provider.playAudio(audioUrl));
-      } else {
-        _startListeningToHusband();
-      }
-    } else if (mounted) {
-      _startListeningToHusband();
-    }
-  }
-
-  /// 捕获当前摄像头一帧画面的 Base64
-  Future<String?> _captureFrameBase64() async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized) {
-      return null;
-    }
-    try {
-      final file = await _cameraController!.takePicture();
-      final bytes = await file.readAsBytes();
-      return base64Encode(bytes);
-    } catch (e) {
-      debugPrint('[VideoCall] 抽帧异常: $e');
-      return null;
-    }
-  }
-
-  /// 发送相公的话及最新视频截帧
-  Future<void> _sendSpokenMessage(String text) async {
+  /// 发送相公的话（智能区分：日常说话零拍照免快门；只有需要端详时才静默拍照）
+  Future<void> _sendSpokenMessage(String text, {bool forceInspect = false}) async {
     final clean = text.trim();
     if (clean.isEmpty || _isSending) return;
+
+    // 严格原子防抖锁定：绝不并发重复发起请求打断！
+    final now = DateTime.now();
+    if (clean == _lastSentWords && now.difference(_lastSendTimestamp).inSeconds < 3) {
+      return;
+    }
+
+    _lastSentWords = clean;
+    _lastSendTimestamp = now;
 
     _silenceTimer?.cancel();
     final provider = context.read<ChatProvider>();
     await _stopListening();
 
+    // 智能识别视觉意图：只有相公说“看我/穿搭/气色”或手动点击看相公，才拍照！
+    final isVisionIntent = forceInspect ||
+        RegExp(r'看我|看穿搭|瞧瞧我|看相公|好看吗|穿得怎么样|气色|自拍|端详|瞧我|我帅不帅|我好看吗').hasMatch(clean);
+
     setState(() {
       _isSending = true;
-      _subtitleText = '相公：“$clean”\n（妾身正在看着相公思量……）';
+      _liveSpokenWords = '';
+      if (isVisionIntent) {
+        _subtitleText = '相公：“$clean”\n（妾身正端详相公气色……）';
+      } else {
+        _subtitleText = '相公：“$clean”\n（妾身正细细琢磨……）';
+      }
     });
 
-    String? imageBase64 = await _captureFrameBase64();
+    String? imageBase64;
+    if (isVisionIntent) {
+      imageBase64 = await _captureFrameBase64();
+    }
 
     final res = await provider.sendVideoCallFrame(
       text: clean,
@@ -350,46 +320,62 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
     }
   }
 
-  /// 点击“让娘子端详我”
-  Future<void> _inspectMe() async {
-    if (_isInspecting) return;
-    setState(() {
-      _isInspecting = true;
-      _subtitleText = '妾身正在凝眸细细端详相公……';
-    });
+  /// 翻转前后摄像头
+  Future<void> _toggleCamera() async {
+    if (_cameras.length < 2) return;
+    _selectedCameraIndex = (_selectedCameraIndex + 1) % _cameras.length;
+    await _setupCameraController(_cameras[_selectedCameraIndex]);
+  }
 
+  /// 接通首帧问候
+  Future<void> _triggerVideoGreeting() async {
     final provider = context.read<ChatProvider>();
     String? imageBase64 = await _captureFrameBase64();
 
     final res = await provider.sendVideoCallFrame(
-      text: '相公正在镜头前，请端详他的穿搭神色，娇嗔点评一番。',
+      text: '',
       imageBase64: imageBase64,
     );
 
-    if (mounted) {
+    if (mounted && res['ok'] == true) {
       setState(() {
-        _isInspecting = false;
-        if (res['ok'] == true) {
-          _subtitleText = res['text'] as String? ?? '';
-          if (res['visualFact'] != null && (res['visualFact'] as String).isNotEmpty) {
-            _visualFactNotice = res['visualFact'] as String;
-          }
-        } else {
-          _subtitleText = '相公，网络稍有些卡顿，不过妾身满心都是相公~';
+        _subtitleText = res['text'] as String? ?? '';
+        if (res['visualFact'] != null && (res['visualFact'] as String).isNotEmpty) {
+          _visualFactNotice = res['visualFact'] as String;
         }
       });
-
       final audioUrl = res['audioUrl'] as String?;
       if (audioUrl != null && audioUrl.isNotEmpty) {
         unawaited(provider.playAudio(audioUrl));
       } else {
-        Future.delayed(const Duration(milliseconds: 1000), () {
-          if (mounted && !_isMuted) {
-            _startListeningToHusband();
-          }
-        });
+        _startListeningToHusband();
       }
+    } else if (mounted) {
+      _startListeningToHusband();
     }
+  }
+
+  /// 捕获摄像头一帧
+  Future<String?> _captureFrameBase64() async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
+      return null;
+    }
+    try {
+      final file = await _cameraController!.takePicture();
+      final bytes = await file.readAsBytes();
+      return base64Encode(bytes);
+    } catch (e) {
+      debugPrint('[VideoCall] 抽帧异常: $e');
+      return null;
+    }
+  }
+
+  /// 手动点击“看相公”端详按钮
+  Future<void> _inspectMe() async {
+    if (_isInspecting || _isSending) return;
+    setState(() => _isInspecting = true);
+    await _sendSpokenMessage('相公正在镜头前，请端详他的穿搭神色，娇嗔点评一番。', forceInspect: true);
+    if (mounted) setState(() => _isInspecting = false);
   }
 
   String _formatDuration(int seconds) {
@@ -400,12 +386,12 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
 
   String _getStatusText(bool isSpeaking) {
     if (isSpeaking) return '正在对相公呢喃软语……';
-    if (_isSending) return '娘子正在凝眸端详相公……';
+    if (_isSending) return '娘子正在凝眸思量……';
     if (_isHoldingToTalk) return '正在聆听相公圣谕，松手送达……';
-    if (_liveSpokenWords.isNotEmpty) return '正在聆听相公说话……';
+    if (_liveSpokenWords.isNotEmpty) return '正在倾听相公说话……';
     if (_isListening) return '深情倾听相公中……';
     if (_isMuted) return '麦克风已静音';
-    return '视讯连接已就绪';
+    return '视讯连接就绪';
   }
 
   Color _getStatusColor(bool isSpeaking) {
@@ -420,8 +406,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
   void dispose() {
     _durationTimer?.cancel();
     _silenceTimer?.cancel();
+    _blinkRandomTimer?.cancel();
     _speech.stop();
-    _pulseController.dispose();
+    _breatheController.dispose();
+    _blinkController.dispose();
     _cameraController?.dispose();
     super.dispose();
   }
@@ -451,115 +439,130 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF13111C),
+      backgroundColor: const Color(0xFF0F0C1B),
       body: Stack(
         children: [
-          // 1. 全屏背景沉浸：古典闺房暗调与小娘子温存立绘
+          // 1. 全屏沉浸梦幻背景：深邃渐变与微星光
           Positioned.fill(
             child: Container(
               decoration: const BoxDecoration(
                 gradient: RadialGradient(
-                  center: Alignment(0, -0.2),
-                  radius: 1.2,
+                  center: Alignment(0, -0.15),
+                  radius: 1.25,
                   colors: [
-                    Color(0xFF2E1A47),
-                    Color(0xFF161026),
-                    Color(0xFF0C0914),
-                  ],
-                ),
-              ),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // 小娘子声浪脉冲立绘
-                    AnimatedBuilder(
-                      animation: _pulseAnimation,
-                      builder: (context, child) {
-                        return Transform.scale(
-                          scale: isSpeaking ? _pulseAnimation.value : 1.0,
-                          child: Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              // 呼吸光晕
-                              if (isSpeaking)
-                                Container(
-                                  width: 200,
-                                  height: 200,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: const Color(0xFFD946EF).withValues(alpha: 0.4),
-                                        blurRadius: 40,
-                                        spreadRadius: 10,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              // 唯美形象
-                              Container(
-                                width: 170,
-                                height: 170,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: isSpeaking ? const Color(0xFFF472B6) : const Color(0xFF8B5CF6),
-                                    width: 3,
-                                  ),
-                                  image: const DecorationImage(
-                                    image: AssetImage('assets/images/pet_avatar.png'),
-                                    fit: BoxFit.cover,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      provider.petStatus.characterName.isNotEmpty
-                          ? provider.petStatus.characterName
-                          : '傲娇小娘子',
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: _getStatusColor(isSpeaking),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          _getStatusText(isSpeaking),
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.white.withValues(alpha: 0.75),
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
+                    Color(0xFF2A1647),
+                    Color(0xFF150D27),
+                    Color(0xFF0A0713),
                   ],
                 ),
               ),
             ),
           ),
 
-          // 2. 右上角画中画：用户前置摄像头画面（相公实时视角）
+          // 2. 核心主角：豆包同款 3D 萌系立体可爱小娘子动画形象（眨眼、呼吸律动、声浪光波）
+          Positioned.fill(
+            child: Center(
+              child: AnimatedBuilder(
+                animation: Listenable.merge([_breatheAnimation, _blinkAnimation]),
+                builder: (context, child) {
+                  return Transform.scale(
+                    scale: isSpeaking ? (_breatheAnimation.value * 1.05) : _breatheAnimation.value,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // 3D 豆包立体虚拟人
+                        Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            // 说话时的梦幻立体声浪光晕
+                            if (isSpeaking) ...[
+                              Container(
+                                width: 250,
+                                height: 250,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: const Color(0xFFD946EF).withValues(alpha: 0.35),
+                                      blurRadius: 50,
+                                      spreadRadius: 16,
+                                    ),
+                                    BoxShadow(
+                                      color: const Color(0xFF8B5CF6).withValues(alpha: 0.25),
+                                      blurRadius: 80,
+                                      spreadRadius: 30,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+
+                            // 3D 粘土软萌卡通小娘子身体与面部
+                            CustomPaint(
+                              size: const Size(220, 220),
+                              painter: Doubao3DAvatarPainter(
+                                isSpeaking: isSpeaking,
+                                eyeOpenFactor: _blinkAnimation.value,
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 20),
+                        // 娘子姓名与状态
+                        Text(
+                          provider.petStatus.characterName.isNotEmpty
+                              ? provider.petStatus.characterName
+                              : '傲娇小娘子',
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            letterSpacing: 1.2,
+                            shadows: [
+                              Shadow(color: Color(0x88D946EF), blurRadius: 12),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: _getStatusColor(isSpeaking),
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: _getStatusColor(isSpeaking).withValues(alpha: 0.6),
+                                    blurRadius: 8,
+                                    spreadRadius: 1,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _getStatusText(isSpeaking),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.white.withValues(alpha: 0.8),
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+
+          // 3. 右上角画中画：用户前置摄像头画面（相公实时视角）
           Positioned(
             top: 54,
             right: 18,
@@ -569,7 +572,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
               decoration: BoxDecoration(
                 color: Colors.black45,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.3), width: 1.5),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.35), width: 1.5),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.5),
@@ -611,7 +614,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
             ),
           ),
 
-          // 3. 顶部通话时长与状态
+          // 4. 顶部通话时长与返回键
           Positioned(
             top: 54,
             left: 20,
@@ -639,7 +642,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
             ),
           ),
 
-          // 4. 下方字幕与实时语音识别浮窗
+          // 5. 下方字幕与实时语音识别浮窗
           Positioned(
             bottom: 125,
             left: 20,
@@ -652,7 +655,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF6D28D9).withValues(alpha: 0.35),
+                      color: const Color(0xFF6D28D9).withValues(alpha: 0.4),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: const Color(0xFFA78BFA).withValues(alpha: 0.3)),
                     ),
@@ -671,14 +674,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: _liveSpokenWords.isNotEmpty
-                          ? const Color(0xFF38BDF8).withValues(alpha: 0.6)
+                          ? const Color(0xFF38BDF8).withValues(alpha: 0.7)
                           : Colors.white.withValues(alpha: 0.15),
                       width: _liveSpokenWords.isNotEmpty ? 1.5 : 1,
                     ),
                     boxShadow: _liveSpokenWords.isNotEmpty
                         ? [
                             BoxShadow(
-                              color: const Color(0xFF38BDF8).withValues(alpha: 0.25),
+                              color: const Color(0xFF38BDF8).withValues(alpha: 0.3),
                               blurRadius: 12,
                               spreadRadius: 2,
                             ),
@@ -703,7 +706,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
             ),
           ),
 
-          // 5. 底部豪华视讯控制栏
+          // 6. 底部视讯控制栏
           Positioned(
             bottom: 30,
             left: 20,
@@ -718,7 +721,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
                   onTap: _toggleCamera,
                 ),
 
-                // 让娘子端详我（拍照并由视觉识别）
+                // 让娘子端详我（只有点击此按钮或说“看我”才拍照，日常说话不拍照）
                 _buildCircleButton(
                   icon: _isInspecting ? Icons.hourglass_top_rounded : Icons.remove_red_eye_rounded,
                   label: _isInspecting ? '端详中...' : '看相公',
@@ -726,7 +729,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
                   onTap: _isInspecting ? null : _inspectMe,
                 ),
 
-                // 麦克风（支持点击静音/开麦，也支持长按直接对讲）
+                // 麦克风（支持点击静音/开麦，也支持长按对讲）
                 GestureDetector(
                   onTap: () {
                     HapticFeedback.selectionClick();
@@ -808,7 +811,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
                   ),
                 ),
 
-                // 红色挂断大按钮
+                // 挂断按钮
                 GestureDetector(
                   onTap: () {
                     provider.stopAudio();
@@ -879,5 +882,147 @@ class _VideoCallScreenState extends State<VideoCallScreen> with TickerProviderSt
         ],
       ),
     );
+  }
+}
+
+/// 豆包风格 3D 萌系立体可爱小娘子动画形象绘制器
+class Doubao3DAvatarPainter extends CustomPainter {
+  final bool isSpeaking;
+  final double eyeOpenFactor; // 1.0 为睁眼，0.0 为闭眼/眨眼
+
+  Doubao3DAvatarPainter({
+    required this.isSpeaking,
+    required this.eyeOpenFactor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2.2;
+
+    // 1. 3D 立体柔糯面庞底色（豆包同款柔光渐变球体）
+    final headPaint = Paint()
+      ..shader = RadialGradient(
+        center: const Alignment(-0.35, -0.45),
+        radius: 0.9,
+        colors: const [
+          Color(0xFFFFF0F5), // 柔白高光
+          Color(0xFFFFD8E4), // 娇嫩粉白
+          Color(0xFFF9A8D4), // 边缘立体暗调
+        ],
+      ).createShader(Rect.fromCircle(center: center, radius: radius));
+
+    canvas.drawCircle(center, radius, headPaint);
+
+    // 2. 豆包同款软萌发髻与小发簪
+    final bunCenter = Offset(center.dx, center.dy - radius * 0.85);
+    final bunPaint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [Color(0xFF4C1D95), Color(0xFF2E1065)],
+      ).createShader(Rect.fromCircle(center: bunCenter, radius: radius * 0.45));
+    canvas.drawCircle(bunCenter, radius * 0.38, bunPaint);
+
+    // 发簪珠玉（金翠微光）
+    final pinPaint = Paint()..color = const Color(0xFFFDE047);
+    canvas.drawCircle(Offset(bunCenter.dx + radius * 0.35, bunCenter.dy), 7, pinPaint);
+    final pearlPaint = Paint()..color = const Color(0xFF34D399);
+    canvas.drawCircle(Offset(bunCenter.dx + radius * 0.48, bunCenter.dy + 8), 5, pearlPaint);
+
+    // 3. 娇羞粉嫩小腮红
+    final blushPaint = Paint()
+      ..color = const Color(0xFFFB7185).withValues(alpha: 0.55)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
+    canvas.drawOval(
+      Rect.fromCenter(center: Offset(center.dx - radius * 0.52, center.dy + radius * 0.15), width: 34, height: 20),
+      blushPaint,
+    );
+    canvas.drawOval(
+      Rect.fromCenter(center: Offset(center.dx + radius * 0.52, center.dy + radius * 0.15), width: 34, height: 20),
+      blushPaint,
+    );
+
+    // 4. 灵动水灵灵大眼睛（支持眨眼与弯月笑眼）
+    final eyeY = center.dy - radius * 0.05;
+    final leftEyeX = center.dx - radius * 0.36;
+    final rightEyeX = center.dx + radius * 0.36;
+
+    if (isSpeaking) {
+      // 说话时甜美弯月笑眼
+      final smileEyePaint = Paint()
+        ..color = const Color(0xFF2E1065)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4.5
+        ..strokeCap = StrokeCap.round;
+
+      final leftPath = Path()
+        ..moveTo(leftEyeX - 16, eyeY + 2)
+        ..quadraticBezierTo(leftEyeX, eyeY - 12, leftEyeX + 16, eyeY + 2);
+      canvas.drawPath(leftPath, smileEyePaint);
+
+      final rightPath = Path()
+        ..moveTo(rightEyeX - 16, eyeY + 2)
+        ..quadraticBezierTo(rightEyeX, eyeY - 12, rightEyeX + 16, eyeY + 2);
+      canvas.drawPath(rightPath, smileEyePaint);
+    } else {
+      // 平时水灵灵大眼睛（眨眼缩放）
+      final eyeHeight = 26.0 * eyeOpenFactor;
+      final eyePaint = Paint()..color = const Color(0xFF1E1035);
+
+      if (eyeHeight > 2.0) {
+        // 眼眶底色
+        canvas.drawOval(
+          Rect.fromCenter(center: Offset(leftEyeX, eyeY), width: 22, height: eyeHeight),
+          eyePaint,
+        );
+        canvas.drawOval(
+          Rect.fromCenter(center: Offset(rightEyeX, eyeY), width: 22, height: eyeHeight),
+          eyePaint,
+        );
+
+        // 纯真水润高光点
+        if (eyeOpenFactor > 0.6) {
+          final glintPaint = Paint()..color = Colors.white;
+          canvas.drawCircle(Offset(leftEyeX - 3, eyeY - 5), 4.5, glintPaint);
+          canvas.drawCircle(Offset(leftEyeX + 3, eyeY + 4), 2.5, glintPaint);
+          canvas.drawCircle(Offset(rightEyeX - 3, eyeY - 5), 4.5, glintPaint);
+          canvas.drawCircle(Offset(rightEyeX + 3, eyeY + 4), 2.5, glintPaint);
+        }
+      } else {
+        // 闭眼一条细缝
+        final closePaint = Paint()
+          ..color = const Color(0xFF2E1065)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3.5;
+        canvas.drawLine(Offset(leftEyeX - 12, eyeY), Offset(leftEyeX + 12, eyeY), closePaint);
+        canvas.drawLine(Offset(rightEyeX - 12, eyeY), Offset(rightEyeX + 12, eyeY), closePaint);
+      }
+    }
+
+    // 5. 灵动小嘴巴（说话时微张动效，闭嘴时甜甜微笑）
+    final mouthPaint = Paint()
+      ..color = const Color(0xFFE11D48)
+      ..style = isSpeaking ? PaintingStyle.fill : PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..strokeCap = StrokeCap.round;
+
+    final mouthY = center.dy + radius * 0.42;
+    if (isSpeaking) {
+      canvas.drawOval(
+        Rect.fromCenter(center: Offset(center.dx, mouthY), width: 18, height: 14),
+        mouthPaint,
+      );
+    } else {
+      final mouthPath = Path()
+        ..moveTo(center.dx - 12, mouthY - 2)
+        ..quadraticBezierTo(center.dx, mouthY + 8, center.dx + 12, mouthY - 2);
+      canvas.drawPath(mouthPath, mouthPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant Doubao3DAvatarPainter oldDelegate) {
+    return oldDelegate.isSpeaking != isSpeaking || oldDelegate.eyeOpenFactor != eyeOpenFactor;
   }
 }

@@ -71,6 +71,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.dispose();
   }
 
+  Future<void> _autoSaveRoutine() async {
+    String pad(int n) => n.toString().padLeft(2, '0');
+    final newRoutine = RoutineConfig(
+      morningCallEnabled: _morningCallEnabled,
+      morningCallTime: '${pad(_morningCallTime.hour)}:${pad(_morningCallTime.minute)}',
+      nightSleepEnabled: _nightSleepEnabled,
+      nightSleepTime: '${pad(_nightSleepTime.hour)}:${pad(_nightSleepTime.minute)}',
+      idleChatEnabled: _idleChatEnabled,
+      idleChatIntervalHours: _idleChatIntervalHours,
+      voiceEnabled: _voiceEnabled,
+      keepAliveEnabled: _keepAliveEnabled,
+    );
+    final provider = context.read<ChatProvider>();
+    await provider.saveRoutineConfig(newRoutine);
+  }
+
   Future<void> _handleTestConnection() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() {
@@ -204,7 +220,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: const Text('🌅 晨光早安唤醒', style: TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: Text('早晨 ${_morningCallTime.format(context)} 娇滴滴念语音叫醒夫君'),
                         value: _morningCallEnabled,
-                        onChanged: (val) => setState(() => _morningCallEnabled = val),
+                        onChanged: (val) {
+                          setState(() => _morningCallEnabled = val);
+                          _autoSaveRoutine();
+                        },
                         secondary: TextButton(
                           onPressed: _morningCallEnabled
                               ? () async {
@@ -212,7 +231,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     context: context,
                                     initialTime: _morningCallTime,
                                   );
-                                  if (picked != null) setState(() => _morningCallTime = picked);
+                                  if (picked != null) {
+                                    setState(() => _morningCallTime = picked);
+                                    _autoSaveRoutine();
+                                  }
                                 }
                               : null,
                           child: Text(_morningCallTime.format(context), style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -224,7 +246,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: const Text('🌙 深夜催歇就寝', style: TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: Text('夜晚 ${_nightSleepTime.format(context)} 催促相公放下手机温存安歇'),
                         value: _nightSleepEnabled,
-                        onChanged: (val) => setState(() => _nightSleepEnabled = val),
+                        onChanged: (val) {
+                          setState(() => _nightSleepEnabled = val);
+                          _autoSaveRoutine();
+                        },
                         secondary: TextButton(
                           onPressed: _nightSleepEnabled
                               ? () async {
@@ -232,7 +257,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     context: context,
                                     initialTime: _nightSleepTime,
                                   );
-                                  if (picked != null) setState(() => _nightSleepTime = picked);
+                                  if (picked != null) {
+                                    setState(() => _nightSleepTime = picked);
+                                    _autoSaveRoutine();
+                                  }
                                 }
                               : null,
                           child: Text(_nightSleepTime.format(context), style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -244,12 +272,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: const Text('💬 白日主动撒娇', style: TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: Text('白天超过 $_idleChatIntervalHours 小时没理她，主动发情话贴贴'),
                         value: _idleChatEnabled,
-                        onChanged: (val) => setState(() => _idleChatEnabled = val),
+                        onChanged: (val) {
+                          setState(() => _idleChatEnabled = val);
+                          _autoSaveRoutine();
+                        },
                         secondary: DropdownButton<int>(
                           value: _idleChatIntervalHours,
                           underline: const SizedBox(),
                           items: [1, 2, 3, 4, 6].map((h) => DropdownMenuItem(value: h, child: Text('$h小时'))).toList(),
-                          onChanged: _idleChatEnabled ? (val) => setState(() => _idleChatIntervalHours = val ?? 3) : null,
+                          onChanged: _idleChatEnabled
+                              ? (val) {
+                                  setState(() => _idleChatIntervalHours = val ?? 3);
+                                  _autoSaveRoutine();
+                                }
+                              : null,
                         ),
                       ),
                       // 4. 自动语音播报
@@ -258,7 +294,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: const Text('🔊 叫醒时自动朗读语音', style: TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: const Text('触发早安/晚安时，手机自动念出小娘子原声语音'),
                         value: _voiceEnabled,
-                        onChanged: (val) => setState(() => _voiceEnabled = val),
+                        onChanged: (val) {
+                          setState(() => _voiceEnabled = val);
+                          _autoSaveRoutine();
+                        },
                       ),
                       // 5. 锁屏夜间守护与晨光保活
                       SwitchListTile(
@@ -266,7 +305,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: const Text('🛡️ 锁屏夜间守护与晨光保活', style: TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: const Text('微弱静音心跳维持系统 Audio 通道，iOS/Android 锁屏整夜不休眠、清晨准时叫醒'),
                         value: _keepAliveEnabled,
-                        onChanged: (val) => setState(() => _keepAliveEnabled = val),
+                        onChanged: (val) {
+                          setState(() => _keepAliveEnabled = val);
+                          _autoSaveRoutine();
+                        },
                       ),
                       const SizedBox(height: 12),
                       // 6. 锁屏叫醒即时测试按钮
