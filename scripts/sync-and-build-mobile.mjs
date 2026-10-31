@@ -196,6 +196,25 @@ export async function runBuildAndFetch() {
   console.log(' 现在可以使用爱思助手 / 巨魔(TrollStore) / AltStore 签名安装！');
   console.log('========================================================\n');
 
+  // 6. 如果本地存在编译好的 Android APK，自动同步到 FamilySoul/mobile 与小主机
+  const scriptDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([a-zA-Z]:)/, '$1'));
+  const rootDir = path.resolve(scriptDir, '..');
+  const localApk = path.resolve(rootDir, 'mobile/build/app/outputs/flutter-apk/app-release.apk');
+  if (fs.existsSync(localApk)) {
+    const familySoulMobile = 'E:\\GitHub\\FamilySoul\\mobile';
+    try {
+      if (!fs.existsSync(familySoulMobile)) fs.mkdirSync(familySoulMobile, { recursive: true });
+      fs.copyFileSync(localApk, path.join(familySoulMobile, 'SurfCore伴侣_最新版.apk'));
+      console.log(`[Mobile-Build] Android APK 已自动同步至: ${familySoulMobile}\\SurfCore伴侣_最新版.apk`);
+    } catch (_) {}
+
+    const smbDest = '\\\\192.168.1.213\\H5\\surfcore_family_update\\SurfCore伴侣_最新版.apk';
+    try {
+      fs.copyFileSync(localApk, smbDest);
+      console.log(`[Mobile-Build] Android APK 已自动备份至小主机: ${smbDest}`);
+    } catch (_) {}
+  }
+
   return destIpa;
 }
 
